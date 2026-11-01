@@ -218,6 +218,54 @@ func (q *Queries) ListProjects(ctx context.Context, arg ListProjectsParams) ([]P
 	return items, nil
 }
 
+const listProjectsByTitle = `-- name: ListProjectsByTitle :many
+SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, start_date, due_date, workflow_id FROM project
+WHERE workspace_id = $1
+  AND lower(title) = lower($2::text)
+ORDER BY created_at ASC
+`
+
+type ListProjectsByTitleParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Title       string      `json:"title"`
+}
+
+// Projects named in a chat /issue's /project line, matched case-insensitively.
+func (q *Queries) ListProjectsByTitle(ctx context.Context, arg ListProjectsByTitleParams) ([]Project, error) {
+	rows, err := q.db.Query(ctx, listProjectsByTitle, arg.WorkspaceID, arg.Title)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Project{}
+	for rows.Next() {
+		var i Project
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Title,
+			&i.Description,
+			&i.Icon,
+			&i.Status,
+			&i.LeadType,
+			&i.LeadID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Priority,
+			&i.StartDate,
+			&i.DueDate,
+			&i.WorkflowID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockProjectForChatSessionCreate = `-- name: LockProjectForChatSessionCreate :one
 SELECT id FROM project
 WHERE id = $1 AND workspace_id = $2

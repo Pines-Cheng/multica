@@ -57,3 +57,59 @@ func TestRouter_IssueStaysWithTheAgentLeadingNoneOrSeveralSquads(t *testing.T) {
 		}
 	}
 }
+
+type fakeProjects struct{ projects []db.Project }
+
+func (f fakeProjects) ListProjectsByTitle(context.Context, db.ListProjectsByTitleParams) ([]db.Project, error) {
+	return f.projects, nil
+}
+
+func TestExtractProjectDirective(t *testing.T) {
+	rest, name := extractProjectDirective("/project  Hello Demo \nadd an endpoint\nsee /project docs")
+	if name != "Hello Demo" || rest != "add an endpoint\nsee /project docs" {
+		t.Fatalf("rest=%q name=%q", rest, name)
+	}
+	if _, name := extractProjectDirective("mention /projects here\n/projectx y"); name != "" {
+		t.Fatalf("non-directive lines matched %q", name)
+	}
+}
+
+// A /project line files the issue under the one project of that title and
+// never reaches the description; an unknown title files it without one.
+func TestRouter_IssueProjectDirective(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		projects []db.Project
+		want     bool
+		miss     string
+	}{
+		{"one match", []db.Project{{ID: uid(95), Title: "Hello Demo"}}, true, ""},
+		{"no match", nil, false, "not_found"},
+		{"ambiguous", []db.Project{{ID: uid(96)}, {ID: uid(97)}}, false, "ambiguous"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.binder.parseIssue = true
+			h.router = NewRouter(h.issues, h.tasks, h.reader, RouterConfig{Logger: discardLogger(), Lifecycle: h.lifecycle, Projects: fakeProjects{tc.projects}})
+			set := ResolverSet{Installation: h.inst, Identity: h.ident, Dedup: h.dedup, Session: h.binder,
+				Audit: h.audit, Replier: h.replier, Typing: h.typing, Media: h.media, OriginType: "lark_chat", IssueProjectDirective: true}
+			h.router.Register(channel.TypeFeishu, set)
+			msg := p2pMessage(t)
+			msg.Text = "/issue Add hello\n/project hello demo\nadd an endpoint"
+			msg.CommandText = msg.Text
+			res, _, err := h.router.dispatch(context.Background(), set, msg, false, false)
+			if err != nil {
+				t.Fatalf("dispatch: %v", err)
+			}
+			if got := h.issues.params.ProjectID.Valid; got != tc.want {
+				t.Fatalf("project set = %v, want %v", got, tc.want)
+			}
+			if h.issues.params.Description.String != "add an endpoint" {
+				t.Fatalf("description = %q", h.issues.params.Description.String)
+			}
+			if res.IssueProjectMiss != tc.miss {
+				t.Fatalf("miss = %q, want %q", res.IssueProjectMiss, tc.miss)
+			}
+		})
+	}
+}

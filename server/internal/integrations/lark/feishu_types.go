@@ -129,6 +129,9 @@ type DispatchResult struct {
 	// IssueSquadName names the squad an /issue was handed to; empty when
 	// the bot's own agent kept it.
 	IssueSquadName string
+	// IssueProjectName / IssueProjectMiss mirror engine.Result.
+	IssueProjectName string
+	IssueProjectMiss string
 	// IssueDuplicate distinguishes an active-issue conflict from a successful
 	// create while carrying the existing issue fields above.
 	IssueDuplicate bool

@@ -62,3 +62,10 @@ FROM issue
 WHERE workspace_id = sqlc.arg('workspace_id')::uuid
   AND project_id = ANY(sqlc.arg('project_ids')::uuid[])
 GROUP BY project_id;
+
+-- name: ListProjectsByTitle :many
+-- Projects named in a chat /issue's /project line, matched case-insensitively.
+SELECT * FROM project
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND lower(title) = lower(sqlc.arg('title')::text)
+ORDER BY created_at ASC;

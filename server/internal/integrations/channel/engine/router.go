@@ -42,6 +42,7 @@ type Router struct {
 	reader    SessionReader
 	lifecycle ChannelChatLifecycle
 	squads    SquadLookup
+	projects  ProjectLookup
 
 	batcher *pendingBatcher
 
@@ -82,6 +83,8 @@ type RouterConfig struct {
 	// Squads enables ResolverSet.IssueToLeaderSquad. Nil keeps every /issue
 	// on the bot's agent.
 	Squads SquadLookup
+	// Projects enables ResolverSet.IssueProjectDirective.
+	Projects ProjectLookup
 }
 
 // NewRouter builds a Router around the shared (platform-agnostic) services:
@@ -109,6 +112,7 @@ func NewRouter(issues IssueCreator, tasks TaskEnqueuer, reader SessionReader, cf
 		reader:       reader,
 		lifecycle:    cfg.Lifecycle,
 		squads:       cfg.Squads,
+		projects:     cfg.Projects,
 		replyTimeout: cfg.ReplyTimeout,
 		mediaTimeout: cfg.MediaTimeout,
 		mediaCtx:     mediaCtx,
@@ -678,7 +682,8 @@ func (r *Router) processClaimed(ctx context.Context, set ResolverSet, msg channe
 			assignedRunFireAt = localMediaDeadline.Add(mediaFinalizeTimeout)
 		}
 		squad := r.leaderSquad(ctx, set, inst)
-		issueRes, err := r.createIssue(ctx, inst, set.OriginType, identity.UserID, sessionID, *appendRes.IssueCommand, prefix, assignedRunFireAt, squad)
+		project := r.projectDirective(ctx, set, inst, appendRes.IssueCommand, &res)
+		issueRes, err := r.createIssue(ctx, inst, set.OriginType, identity.UserID, sessionID, *appendRes.IssueCommand, prefix, assignedRunFireAt, squad, project)
 		if errors.Is(err, service.ErrActiveDuplicate) && issueRes.DuplicateIssue != nil {
 			duplicate := *issueRes.DuplicateIssue
 			res.IssueID = duplicate.ID
@@ -1233,7 +1238,36 @@ func (r *Router) leaderSquad(ctx context.Context, set ResolverSet, inst Resolved
 	return &squads[0]
 }
 
-func (r *Router) createIssue(ctx context.Context, inst ResolvedInstallation, originType string, creatorUserID, sessionID pgtype.UUID, cmd IssueCommand, issuePrefix string, assignedRunFireAt time.Time, squad *db.Squad) (service.IssueCreateResult, error) {
+// projectDirective strips a "/project <name>" line from the command and
+// resolves it to the one project of that title. A name matching no project,
+// or several, files the issue without one and says why in res.
+func (r *Router) projectDirective(ctx context.Context, set ResolverSet, inst ResolvedInstallation, cmd *IssueCommand, res *Result) pgtype.UUID {
+	if !set.IssueProjectDirective || r.projects == nil {
+		return pgtype.UUID{}
+	}
+	rest, name := extractProjectDirective(cmd.Description)
+	if name == "" {
+		return pgtype.UUID{}
+	}
+	cmd.Description = rest
+	projects, err := r.projects.ListProjectsByTitle(ctx, db.ListProjectsByTitleParams{WorkspaceID: inst.WorkspaceID, Title: name})
+	switch {
+	case err != nil:
+		r.logger.Warn("channel engine: /project lookup failed", "project", name, "error", err)
+		res.IssueProjectMiss = "not_found"
+	case len(projects) == 1:
+		res.IssueProjectName = projects[0].Title
+		return projects[0].ID
+	case len(projects) == 0:
+		res.IssueProjectMiss = "not_found"
+	default:
+		res.IssueProjectMiss = "ambiguous"
+	}
+	res.IssueProjectName = name
+	return pgtype.UUID{}
+}
+
+func (r *Router) createIssue(ctx context.Context, inst ResolvedInstallation, originType string, creatorUserID, sessionID pgtype.UUID, cmd IssueCommand, issuePrefix string, assignedRunFireAt time.Time, squad *db.Squad, projectID pgtype.UUID) (service.IssueCreateResult, error) {
 	if cmd.Title == "" {
 		return service.IssueCreateResult{}, ErrEmptyIssueTitle
 	}
@@ -1249,6 +1283,7 @@ func (r *Router) createIssue(ctx context.Context, inst ResolvedInstallation, ori
 		Priority:     "none",
 		AssigneeType: pgtype.Text{String: assigneeType, Valid: true},
 		AssigneeID:   assigneeID,
+		ProjectID:    projectID,
 		CreatorType:  "member",
 		CreatorID:    creatorUserID,
 		OriginType:   pgtype.Text{String: originType, Valid: originType != ""},

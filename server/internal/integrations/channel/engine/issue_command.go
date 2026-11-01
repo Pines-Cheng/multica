@@ -148,3 +148,27 @@ func matchingLineBounds(body, expected string) []textLineBounds {
 	}
 	return bounds
 }
+
+// projectDirectivePrefix names the project of an /issue on a line of its own
+// in the description: "/project <name>".
+const projectDirectivePrefix = "/project"
+
+// extractProjectDirective removes the first "/project <name>" line from an
+// /issue description and returns the name. Only whole lines count, so prose
+// that mentions /project is left alone.
+func extractProjectDirective(description string) (rest, project string) {
+	lines := strings.Split(description, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		name, ok := strings.CutPrefix(trimmed, projectDirectivePrefix)
+		if !ok || (name != "" && name[0] != ' ' && name[0] != '\t') {
+			continue
+		}
+		if name = strings.TrimSpace(name); name == "" {
+			continue
+		}
+		lines = append(lines[:i], lines[i+1:]...)
+		return strings.TrimSpace(strings.Join(lines, "\n")), name
+	}
+	return description, ""
+}

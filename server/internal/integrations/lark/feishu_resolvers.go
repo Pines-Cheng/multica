@@ -363,6 +363,8 @@ func dispatchResultFromEngine(res engine.Result) DispatchResult {
 		IssueWorkspaceSlug: res.IssueWorkspaceSlug,
 		IssueTitle:         res.IssueTitle,
 		IssueSquadName:     res.IssueSquadName,
+		IssueProjectName:   res.IssueProjectName,
+		IssueProjectMiss:   res.IssueProjectMiss,
 		IssueDuplicate:     res.IssueDuplicate,
 		IssueUsageHadMedia: res.IssueUsageHadMedia,
 	}

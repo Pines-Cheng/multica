@@ -84,6 +84,11 @@ type Result struct {
 	// IssueSquadName names the squad an /issue was handed to instead of the
 	// bot's own agent; empty when the agent kept it.
 	IssueSquadName string
+	// IssueProjectName is the project a /project line filed the issue under;
+	// IssueProjectMiss explains a /project line that matched no single
+	// project ("not_found" or "ambiguous").
+	IssueProjectName string
+	IssueProjectMiss string
 	// IssueDuplicate marks an /issue command that did not create a new issue
 	// because the shared duplicate guard found the active IssueID above.
 	// Repliers render this as a business conflict, never as an internal error.
@@ -505,6 +510,14 @@ type ResolverSet struct {
 	// agent leads, when it leads exactly one, so the leader coordinates the
 	// work instead of doing it itself.
 	IssueToLeaderSquad bool
+	// IssueProjectDirective reads a "/project <name>" line in an /issue
+	// description and files the issue under that project.
+	IssueProjectDirective bool
+}
+
+// ProjectLookup finds projects by title. *db.Queries implements it.
+type ProjectLookup interface {
+	ListProjectsByTitle(ctx context.Context, arg db.ListProjectsByTitleParams) ([]db.Project, error)
 }
 
 // SquadLookup finds the squads an agent leads. *db.Queries implements it.
