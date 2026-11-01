@@ -3832,3 +3832,19 @@ export const RuntimeProfileSchema = z
     runtime_type: profile.runtime_type || profile.protocol_family,
   }));
 export const RuntimeProfileListSchema = z.array(RuntimeProfileSchema);
+
+// GET/POST /api/issues/:id/channel-chat. An unknown or malformed chat reads
+// as "no chat", never as a broken page.
+export const IssueChannelChatSchema = z.object({
+  available: z.boolean().catch(false),
+  can_create: z.boolean().catch(false),
+  chat: z
+    .object({
+      channel_type: z.string().default("feishu"),
+      chat_id: z.string(),
+      app_link: z.string(),
+      created_at: z.string().default(""),
+    })
+    .nullable()
+    .catch(null),
+});

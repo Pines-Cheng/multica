@@ -2,7 +2,8 @@ import type { ZodType } from "zod";
 import { AgentRuntimeSchema, EMPTY_RUNTIME } from "../runtimes/schema";
 import type { IssueWakeup, IssueWakeupInput, IssueWakeupSummaryRow, PausedWakeup, SystemWakeup, WakeupRun, WorkspaceSystemWakeup } from "../types/issue-wakeup";
 import type { WorkspaceWakeupPage, WorkspaceWakeupFilters } from "../types/issue-wakeup";
-import { WorkspaceWakeupPageSchema, IssueWakeupSchema, IssueWakeupSummaryRowSchema, PausedWakeupSchema, SystemWakeupSchema, WakeupRunSchema, WorkspaceSystemWakeupSchema } from "./schemas";
+import type { IssueChannelChat } from "../types/issue-channel-chat";
+import { IssueChannelChatSchema, WorkspaceWakeupPageSchema, IssueWakeupSchema, IssueWakeupSummaryRowSchema, PausedWakeupSchema, SystemWakeupSchema, WakeupRunSchema, WorkspaceSystemWakeupSchema } from "./schemas";
 import type { ArchivedInboxFilters } from "../inbox/filter-store";
 import type { ArchivedInboxPage, ArchivedInboxFacets } from "../types/inbox";
 import { parseQoderConnection, parseQoderCatalog, type QoderInput } from "../runtimes/qoder-schema";
@@ -256,6 +257,7 @@ import { type Logger, noopLogger } from "../logger";
 import { createRequestId, createSafeId } from "../utils";
 import { getCurrentSlug } from "../platform/workspace-storage";
 import { parseWithFallback } from "./schema";
+
 import {
   RuntimeProfileSchema,
   RuntimeProfileListSchema,
@@ -771,6 +773,8 @@ function isReplayableBody(body: BodyInit | null | undefined): boolean {
     return true;
   return false;
 }
+
+const EMPTY_ISSUE_CHANNEL_CHAT: IssueChannelChat = { available: false, can_create: false, chat: null };
 
 export class ApiClient {
   private baseUrl: string;
@@ -1338,6 +1342,22 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/wakeups`);
     const parsed = parseWithFallback<IssueWakeup[] | null>(raw, IssueWakeupSchema.array(), null, { endpoint: "GET /api/issues/:id/wakeups" });
     if (!parsed) throw new Error("Could not load wakeups");
+    return parsed;
+  }
+
+  async getIssueChannelChat(issueId: string): Promise<IssueChannelChat> {
+    const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/channel-chat`);
+    return parseWithFallback<IssueChannelChat>(raw, IssueChannelChatSchema, EMPTY_ISSUE_CHANNEL_CHAT, {
+      endpoint: "GET /api/issues/:id/channel-chat",
+    });
+  }
+
+  async createIssueChannelChat(issueId: string): Promise<IssueChannelChat> {
+    const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/channel-chat`, { method: "POST" });
+    const parsed = parseWithFallback<IssueChannelChat | null>(raw, IssueChannelChatSchema, null, {
+      endpoint: "POST /api/issues/:id/channel-chat",
+    });
+    if (!parsed?.chat) throw new Error("Could not create the issue chat");
     return parsed;
   }
 
