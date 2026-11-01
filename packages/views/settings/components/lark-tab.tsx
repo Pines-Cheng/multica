@@ -535,6 +535,7 @@ function LarkAgentBotConnectedBadge({
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [updatingScopes, setUpdatingScopes] = useState(false);
 
   async function handleDisconnect() {
     if (disconnecting) return;
@@ -602,22 +603,46 @@ function LarkAgentBotConnectedBadge({
           app page. Demoted below the status row so it no longer competes
           with the primary connect/disconnect intents. Region-aware tooltip
           keeps the Feishu vs Lark distinction this branch introduced. */}
-      <a
-        href={manageHref}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-1 text-caption text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
-        title={
-          installation.region === "lark"
-            ? t(($) => $.lark.agent_bot_manage_tooltip_lark)
-            : t(($) => $.lark.agent_bot_manage_tooltip_feishu)
-        }
-      >
-        <ExternalLink className="h-3 w-3" />
-        {installation.region === "lark"
-          ? t(($) => $.lark.agent_bot_manage_link_lark)
-          : t(($) => $.lark.agent_bot_manage_link_feishu)}
-      </a>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <a
+          href={manageHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-caption text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+          title={
+            installation.region === "lark"
+              ? t(($) => $.lark.agent_bot_manage_tooltip_lark)
+              : t(($) => $.lark.agent_bot_manage_tooltip_feishu)
+          }
+        >
+          <ExternalLink className="h-3 w-3" />
+          {installation.region === "lark"
+            ? t(($) => $.lark.agent_bot_manage_link_lark)
+            : t(($) => $.lark.agent_bot_manage_link_feishu)}
+        </a>
+        {/* Re-scanning updates this same app (the server passes its app id
+            to Lark), so it grants newly required scopes without orphaning
+            the bot. */}
+        <TooltipHint label={t(($) => $.lark.agent_bot_update_scopes_tooltip)}>
+          <button
+            type="button"
+            onClick={() => setUpdatingScopes(true)}
+            className="inline-flex items-center gap-1 text-caption text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+            data-testid="lark-agent-bot-update-scopes"
+          >
+            <RefreshCw className="h-3 w-3" />
+            {t(($) => $.lark.agent_bot_update_scopes)}
+          </button>
+        </TooltipHint>
+      </div>
+      {updatingScopes && (
+        <LarkInstallDialog
+          wsId={wsId}
+          agentId={installation.agent_id}
+          region={installation.region === "lark" ? "lark" : "feishu"}
+          onClose={() => setUpdatingScopes(false)}
+        />
+      )}
 
       {/* Row 3: the check a silent Bot almost always needs (#8496). An app
           whose events go to a request URL instead of the long connection

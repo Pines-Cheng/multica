@@ -484,6 +484,24 @@ describe("LarkAgentBotConnectedBadge (Unbind / Disconnect)", () => {
     expect(screen.getByRole("link", { name: /Manage in Feishu/i })).toBeTruthy();
   });
 
+  it("re-scans the bound agent's bot to update its permissions", async () => {
+    const user = userEvent.setup();
+    mockBeginInstall.mockResolvedValue({
+      session_id: "sess-update",
+      qr_code_url: "https://accounts.feishu.cn/oauth/v1/device?u=update",
+      expires_in_seconds: 300,
+      poll_interval_seconds: 2,
+    });
+    mockGetStatus.mockResolvedValue({ status: "pending" });
+    render(<LarkAgentBindButton agentId="agent-1" agentName="Bot" />, {
+      wrapper: I18nWrapper,
+    });
+    await user.click(screen.getByTestId("lark-agent-bot-update-scopes"));
+    await waitFor(() => {
+      expect(mockBeginInstall).toHaveBeenCalledWith("workspace-1", "agent-1", "feishu");
+    });
+  });
+
   it("points a silent bot at the event-delivery check (#8496)", () => {
     render(<LarkAgentBindButton agentId="agent-1" agentName="Bot" />, {
       wrapper: I18nWrapper,
