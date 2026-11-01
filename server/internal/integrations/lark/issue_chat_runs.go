@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/integrations/channel"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -69,32 +72,79 @@ func runEventFrom(e events.Event) (runEvent, bool) {
 	return ev, true
 }
 
-// runCards remembers when each run card was last patched.
+// runCards keeps, per running task, what the live card shows.
 type runCards struct {
-	mu   sync.Mutex
-	last map[pgtype.UUID]time.Time
+	mu    sync.Mutex
+	state map[pgtype.UUID]*runState
 }
 
-func (r *runCards) allow(taskID pgtype.UUID, now time.Time, force bool) bool {
+type runState struct {
+	started  time.Time
+	patched  time.Time
+	issueID  pgtype.UUID
+	agentID  pgtype.UUID
+	activity []string
+}
+
+const (
+	runActivityLines = 2
+	// runCardDelay keeps short runs (a leader delegating) out of the chat:
+	// a card opens only once a run has gone on this long.
+	runCardDelay = 20 * time.Second
+)
+
+func (r *runCards) get(taskID pgtype.UUID) *runState {
+	if r.state == nil {
+		r.state = map[pgtype.UUID]*runState{}
+	}
+	st, ok := r.state[taskID]
+	if !ok {
+		st = &runState{started: time.Now()}
+		r.state[taskID] = st
+	}
+	return st
+}
+
+func (r *runCards) start(ev runEvent) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.last == nil {
-		r.last = map[pgtype.UUID]time.Time{}
+	st := r.get(ev.taskID)
+	st.issueID, st.agentID = ev.issueID, ev.agentID
+}
+
+// record adds an activity line and reports whether the card is due a patch.
+func (r *runCards) record(taskID pgtype.UUID, line string, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.get(taskID)
+	if line != "" && (len(st.activity) == 0 || st.activity[len(st.activity)-1] != line) {
+		st.activity = append(st.activity, line)
+		if len(st.activity) > runActivityLines {
+			st.activity = st.activity[len(st.activity)-runActivityLines:]
+		}
 	}
-	if !force && now.Sub(r.last[taskID]) < runCardMinInterval {
+	if now.Sub(st.patched) < runCardMinInterval {
 		return false
 	}
-	if force {
-		delete(r.last, taskID)
-	} else {
-		r.last[taskID] = now
-	}
+	st.patched = now
 	return true
+}
+
+func (r *runCards) snapshot(taskID pgtype.UUID, finish bool) runState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.get(taskID)
+	out := *st
+	out.activity = append([]string(nil), st.activity...)
+	if finish {
+		delete(r.state, taskID)
+	}
+	return out
 }
 
 // registerRuns subscribes the run mirror.
 func (s *IssueChatService) registerRuns(bus *events.Bus) {
-	for _, t := range []string{protocol.EventTaskRunning, protocol.EventTaskProgress, protocol.EventTaskCompleted, protocol.EventTaskFailed, protocol.EventTaskCancelled} {
+	for _, t := range []string{protocol.EventTaskRunning, protocol.EventTaskProgress, protocol.EventTaskMessage, protocol.EventTaskCompleted, protocol.EventTaskFailed, protocol.EventTaskCancelled} {
 		bus.Subscribe(t, s.handleRunEvent)
 	}
 }
@@ -104,8 +154,18 @@ func (s *IssueChatService) handleRunEvent(e events.Event) {
 	if !ok || e.ChatSessionID != "" {
 		return
 	}
-	if ev.eventType == protocol.EventTaskProgress && !s.runs.allow(ev.taskID, time.Now(), false) {
+	switch ev.eventType {
+	case protocol.EventTaskRunning:
+		s.runs.start(ev)
 		return
+	case protocol.EventTaskProgress:
+		if !s.runs.record(ev.taskID, "", time.Now()) {
+			return
+		}
+	case protocol.EventTaskMessage:
+		if !s.runs.record(ev.taskID, activityLine(e.Payload), time.Now()) {
+			return
+		}
 	}
 	s.dispatch(func() {
 		defer s.lock("run:" + uuidString(ev.taskID))()
@@ -117,69 +177,171 @@ func (s *IssueChatService) handleRunEvent(e events.Event) {
 	})
 }
 
-func (s *IssueChatService) syncRun(ctx context.Context, ev runEvent) error {
-	card, err := s.cfg.Store.GetChannelIssueMessageByTask(ctx, ev.taskID)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return err
+// toolCategories names what a tool does without exposing its arguments,
+// which may carry commands, paths or secrets.
+var toolCategories = map[string]string{
+	"bash": "运行命令", "shell": "运行命令", "exec": "运行命令", "exec_command": "运行命令", "local_shell": "运行命令",
+	"edit": "修改文件", "write": "修改文件", "multiedit": "修改文件", "apply_patch": "修改文件", "str_replace_editor": "修改文件",
+	"read": "读取文件", "view": "读取文件",
+	"grep": "搜索代码", "glob": "搜索代码", "search": "搜索代码", "ls": "浏览目录",
+	"webfetch": "查阅资料", "websearch": "查阅资料", "web_search": "查阅资料",
+	"todowrite": "整理计划", "update_plan": "整理计划",
+}
+
+// activityLine renders one transcript frame as a short progress line: the
+// kind of work the agent is doing, or the opening of what it says.
+func activityLine(payload any) string {
+	var m protocol.TaskMessagePayload
+	switch v := payload.(type) {
+	case protocol.TaskMessagePayload:
+		m = v
+	case *protocol.TaskMessagePayload:
+		m = *v
+	default:
+		raw, err := json.Marshal(payload)
+		if err != nil || json.Unmarshal(raw, &m) != nil {
+			return ""
+		}
 	}
+	switch m.Type {
+	case "tool_use":
+		if category, ok := toolCategories[strings.ToLower(m.Tool)]; ok {
+			return category
+		}
+		if m.Tool != "" {
+			return "使用工具 " + oneLine(m.Tool, 30)
+		}
+	case "text":
+		return oneLine(m.Content, 60)
+	case "error":
+		return "遇到错误"
+	}
+	return ""
+}
+
+func oneLine(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > max {
+		s = string(r[:max]) + "…"
+	}
+	return s
+}
+
+func formatElapsed(d time.Duration) string {
+	d = d.Round(time.Second)
+	if d < time.Minute {
+		return fmt.Sprintf("%d 秒", int(d.Seconds()))
+	}
+	return fmt.Sprintf("%d 分 %d 秒", int(d.Minutes()), int(d.Seconds())%60)
+}
+
+func (s *IssueChatService) syncRun(ctx context.Context, ev runEvent) error {
+	finish := ev.eventType == protocol.EventTaskCompleted || ev.eventType == protocol.EventTaskCancelled ||
+		(ev.eventType == protocol.EventTaskFailed && !ev.retryPending)
+	st := s.runs.snapshot(ev.taskID, finish)
+	card, err := s.cfg.Store.GetChannelIssueMessageByTask(ctx, ev.taskID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		if ev.eventType != protocol.EventTaskRunning || !ev.issueID.Valid {
+		// A run that ends before the delay never gets a card.
+		if finish || time.Since(st.started) < runCardDelay || !st.issueID.Valid {
 			return nil
 		}
-		return s.openRunCard(ctx, ev)
+		return s.openRunCard(ctx, ev.taskID, st)
 	}
-	var body string
-	switch ev.eventType {
-	case protocol.EventTaskProgress:
-		body = progressLine(ev)
-	case protocol.EventTaskCompleted:
-		body = "**运行已完成**"
-	case protocol.EventTaskFailed:
-		if ev.retryPending {
-			body = "**运行失败，正在重试…**"
-		} else {
-			body = "**运行失败**"
-			if ev.errText != "" {
-				body += "\n" + ev.errText
-			}
-		}
-	case protocol.EventTaskCancelled:
-		body = "**运行已取消**"
-	default:
-		return nil
-	}
-	if ev.eventType != protocol.EventTaskProgress {
-		s.runs.allow(ev.taskID, time.Now(), true)
+	if err != nil {
+		return err
 	}
 	inst, err := s.cfg.Store.GetLarkInstallation(ctx, card.InstallationID)
 	if err != nil {
 		return err
 	}
+	var body string
+	switch {
+	case ev.eventType == protocol.EventTaskCompleted:
+		body = s.finishedBody(ctx, inst, ev.taskID, "**已完成**", st, s.runSummary(ctx, ev.taskID))
+	case ev.eventType == protocol.EventTaskCancelled:
+		body = s.finishedBody(ctx, inst, ev.taskID, "**已取消**", st, "")
+	case ev.eventType == protocol.EventTaskFailed && !ev.retryPending:
+		reason := "失败原因请在 Multica 中查看，或在群里 @ 它重试。"
+		if ev.errText != "" {
+			reason = oneLine(ev.errText, 120) + "\n可在群里 @ 它重试。"
+		}
+		body = s.finishedBody(ctx, inst, ev.taskID, "**运行失败**", st, reason)
+	case ev.eventType == protocol.EventTaskFailed:
+		body = s.liveBody(ctx, inst, ev.taskID, "**运行失败，正在重试…**", st)
+	default:
+		body = s.liveBody(ctx, inst, ev.taskID, "**运行中**", st)
+	}
+	return s.patchRunCard(ctx, inst, card.ChannelMessageID, body+s.detailsLink(ctx, card.IssueID))
+}
+
+func (s *IssueChatService) liveBody(ctx context.Context, sender Installation, taskID pgtype.UUID, status string, st runState) string {
+	var b strings.Builder
+	b.WriteString(s.agentPrefix(ctx, sender, taskID) + status + " · 已运行 " + formatElapsed(time.Since(st.started)))
+	for _, line := range st.activity {
+		b.WriteString("\n- " + line)
+	}
+	return b.String()
+}
+
+func (s *IssueChatService) finishedBody(ctx context.Context, sender Installation, taskID pgtype.UUID, status string, st runState, detail string) string {
+	body := s.agentPrefix(ctx, sender, taskID) + status + " · 用时 " + formatElapsed(time.Since(st.started))
+	if detail != "" {
+		body += "\n" + detail
+	}
+	return body
+}
+
+// runSummary quotes the opening of the last comment the run wrote.
+func (s *IssueChatService) runSummary(ctx context.Context, taskID pgtype.UUID) string {
+	c, err := s.cfg.Store.GetLatestCommentBySourceTask(ctx, taskID)
+	if err != nil {
+		return ""
+	}
+	return "> " + oneLine(c.Content, 120)
+}
+
+func (s *IssueChatService) detailsLink(ctx context.Context, issueID pgtype.UUID) string {
+	issue, err := s.cfg.Store.GetIssue(ctx, issueID)
+	if err != nil {
+		return ""
+	}
+	ws, err := s.cfg.Store.GetWorkspace(ctx, issue.WorkspaceID)
+	if err != nil {
+		return ""
+	}
+	if link := channel.IssueWebLink(s.cfg.AppURL, ws.Slug, service.IssueIdentifier(ws.IssuePrefix, issue.Number)); link != "" {
+		return "\n[查看详情](" + link + ")"
+	}
+	return ""
+}
+
+// agentPrefix names the agent when another bot relays its card; the
+// sender's avatar already says who it is otherwise.
+func (s *IssueChatService) agentPrefix(ctx context.Context, sender Installation, taskID pgtype.UUID) string {
+	task, err := s.cfg.Store.GetAgentTask(ctx, taskID)
+	if err != nil || task.AgentID == sender.AgentID {
+		return ""
+	}
+	if agent, err := s.cfg.Store.GetAgent(ctx, task.AgentID); err == nil {
+		return "**" + agent.Name + "** · "
+	}
+	return ""
+}
+
+func (s *IssueChatService) patchRunCard(ctx context.Context, inst Installation, messageID, body string) error {
 	creds, err := installationCredentialsFor(inst, s.cfg.Credentials)
 	if err != nil {
 		return err
 	}
-	header := s.runHeader(ctx, inst, ev.agentID)
-	cardJSON, err := issueChatCardJSON(header, runSubtitle(header), body)
+	cardJSON, err := issueChatCardJSON("", "", body)
 	if err != nil {
 		return err
 	}
-	return s.cfg.API.PatchInteractiveCard(ctx, PatchCardParams{InstallationID: creds, LarkCardMessageID: card.ChannelMessageID, CardJSON: cardJSON})
+	return s.cfg.API.PatchInteractiveCard(ctx, PatchCardParams{InstallationID: creds, LarkCardMessageID: messageID, CardJSON: cardJSON})
 }
 
-func progressLine(ev runEvent) string {
-	line := "**运行中**"
-	if ev.total > 0 {
-		line += fmt.Sprintf("（%d/%d）", ev.step, ev.total)
-	}
-	if ev.summary != "" {
-		line += "\n" + ev.summary
-	}
-	return line
-}
-
-func (s *IssueChatService) openRunCard(ctx context.Context, ev runEvent) error {
-	binding, err := s.cfg.Store.GetChannelIssueChatByIssue(ctx, db.GetChannelIssueChatByIssueParams{IssueID: ev.issueID, ChannelType: channelTypeFeishu})
+func (s *IssueChatService) openRunCard(ctx context.Context, taskID pgtype.UUID, st runState) error {
+	binding, err := s.cfg.Store.GetChannelIssueChatByIssue(ctx, db.GetChannelIssueChatByIssueParams{IssueID: st.issueID, ChannelType: channelTypeFeishu})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -191,20 +353,19 @@ func (s *IssueChatService) openRunCard(ctx context.Context, ev runEvent) error {
 		return err
 	}
 	sender := steward
-	if inst, ok, err := s.agentInstallation(ctx, binding.WorkspaceID, ev.agentID); err == nil && ok {
+	if inst, ok, err := s.agentInstallation(ctx, binding.WorkspaceID, st.agentID); err == nil && ok {
 		sender = inst
 	}
 	var target ReplyTarget
 	if binding.ThreadRootMessageID != "" {
 		target = ReplyTarget{MessageID: binding.ThreadRootMessageID, InThread: true}
 	}
-	header := s.runHeader(ctx, sender, ev.agentID)
-	msgID, err := s.sendCard(ctx, sender, binding, header, "**运行中**", target)
+	link := s.detailsLink(ctx, binding.IssueID)
+	msgID, err := s.sendCard(ctx, sender, binding, "", s.liveBody(ctx, sender, taskID, "**运行中**", st)+link, target)
 	var apiErr *APIError
 	if err != nil && sender.ID != steward.ID && errors.As(err, &apiErr) {
 		sender = steward
-		header = s.runHeader(ctx, sender, ev.agentID)
-		msgID, err = s.sendCard(ctx, sender, binding, header, "**运行中**", target)
+		msgID, err = s.sendCard(ctx, sender, binding, "", s.liveBody(ctx, sender, taskID, "**运行中**", st)+link, target)
 	}
 	if err != nil {
 		return err
@@ -212,24 +373,6 @@ func (s *IssueChatService) openRunCard(ctx context.Context, ev runEvent) error {
 	return s.cfg.Store.RecordChannelIssueMessage(ctx, db.RecordChannelIssueMessageParams{
 		WorkspaceID: binding.WorkspaceID, IssueID: binding.IssueID, BindingID: binding.ID,
 		InstallationID: sender.ID, ChannelMessageID: msgID,
-		Direction: issueMessageOutbound, Kind: issueMessageKindTask, TaskID: ev.taskID,
+		Direction: issueMessageOutbound, Kind: issueMessageKindTask, TaskID: taskID,
 	})
-}
-
-// runHeader names the agent when its run card is relayed by another bot.
-func (s *IssueChatService) runHeader(ctx context.Context, sender Installation, agentID pgtype.UUID) string {
-	if sender.AgentID == agentID {
-		return ""
-	}
-	if agent, err := s.cfg.Store.GetAgent(ctx, agentID); err == nil {
-		return agent.Name
-	}
-	return "Agent"
-}
-
-func runSubtitle(header string) string {
-	if header == "" {
-		return ""
-	}
-	return "来自 Multica"
 }

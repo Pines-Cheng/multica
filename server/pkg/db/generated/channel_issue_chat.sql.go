@@ -265,6 +265,42 @@ func (q *Queries) GetChannelIssueMessageByTask(ctx context.Context, taskID pgtyp
 	return i, err
 }
 
+const getLatestCommentBySourceTask = `-- name: GetLatestCommentBySourceTask :one
+SELECT id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids FROM comment
+WHERE source_task_id = $1 AND deleted_at IS NULL
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+// The last comment a run wrote, summarised on its finished run card.
+func (q *Queries) GetLatestCommentBySourceTask(ctx context.Context, sourceTaskID pgtype.UUID) (Comment, error) {
+	row := q.db.QueryRow(ctx, getLatestCommentBySourceTask, sourceTaskID)
+	var i Comment
+	err := row.Scan(
+		&i.ID,
+		&i.IssueID,
+		&i.AuthorType,
+		&i.AuthorID,
+		&i.Content,
+		&i.Type,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ParentID,
+		&i.WorkspaceID,
+		&i.ResolvedAt,
+		&i.ResolvedByType,
+		&i.ResolvedByID,
+		&i.SourceTaskID,
+		&i.QuickActionID,
+		&i.ViaPluginID,
+		&i.Revision,
+		&i.RecoverySettledAt,
+		&i.DeletedAt,
+		&i.SuppressedAgentIds,
+	)
+	return i, err
+}
+
 const listChannelIssueMessagesByComment = `-- name: ListChannelIssueMessagesByComment :many
 SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at, task_id FROM channel_issue_message
 WHERE comment_id = $1

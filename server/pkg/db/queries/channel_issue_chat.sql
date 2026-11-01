@@ -109,3 +109,10 @@ WHERE workspace_id = sqlc.arg('workspace_id')
   AND status = 'active'
 ORDER BY created_at DESC
 LIMIT 1;
+
+-- name: GetLatestCommentBySourceTask :one
+-- The last comment a run wrote, summarised on its finished run card.
+SELECT * FROM comment
+WHERE source_task_id = sqlc.arg('source_task_id') AND deleted_at IS NULL
+ORDER BY created_at DESC
+LIMIT 1;

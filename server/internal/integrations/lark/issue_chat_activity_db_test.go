@@ -5,11 +5,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/testutil"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -69,6 +71,7 @@ type activityFixture struct {
 	api     *seqAPI
 	chats   *fakeChats
 	bus     *events.Bus
+	svc     *IssueChatService
 }
 
 func newActivityFixture(t *testing.T) *activityFixture {
@@ -90,10 +93,11 @@ func newActivityFixture(t *testing.T) *activityFixture {
 		}
 	})
 	f.steward = f.installBot(t, leader, "cli_p1_leader")
-	NewIssueChatService(IssueChatServiceConfig{
+	f.svc = NewIssueChatService(IssueChatServiceConfig{
 		Store: f.store, Credentials: fakeCredentials{secret: "shh"}, API: f.api, Chats: f.chats,
 		Logger: newDiscardLogger(), Synchronous: true,
-	}).Register(f.bus)
+	})
+	f.svc.Register(f.bus)
 	return f
 }
 
@@ -222,14 +226,41 @@ func TestIssueChatP2_RunIsOneLiveCard(t *testing.T) {
 	}
 	sent := len(f.api.sent)
 	run(protocol.EventTaskRunning, nil)
+	if len(f.api.sent) != sent {
+		t.Fatal("a run that has only just started must not post a card yet")
+	}
+	f.svc.runs.mu.Lock()
+	f.svc.runs.state[util.MustParseUUID(task)].started = time.Now().Add(-runCardDelay)
+	f.svc.runs.mu.Unlock()
+	f.bus.Publish(events.Event{Type: protocol.EventTaskMessage, WorkspaceID: f.ws, TaskID: task, Payload: protocol.TaskMessagePayload{
+		TaskID: task, Type: "tool_use", Tool: "Bash", Input: map[string]any{"command": "go test ./secret"},
+	}})
 	if len(f.api.sent) != sent+1 || f.api.sent[sent].InstallationID.AppID != "cli_p1_leader" {
 		t.Fatalf("running card = %+v", f.api.sent[sent:])
+	}
+	card := f.api.sent[sent].CardJSON
+	if !strings.Contains(card, "运行命令") || strings.Contains(card, "go test") || strings.Contains(card, `"header"`) {
+		t.Fatalf("running card shows the kind of work only, without a header: %s", card)
 	}
 	run(protocol.EventTaskCompleted, nil)
 	if len(f.api.sent) != sent+1 {
 		t.Fatal("a run must not post a second card")
 	}
-	if len(f.api.patched) == 0 || !strings.Contains(f.api.patched[len(f.api.patched)-1].CardJSON, "运行已完成") {
+	if len(f.api.patched) == 0 || !strings.Contains(f.api.patched[len(f.api.patched)-1].CardJSON, "已完成") {
 		t.Fatalf("completion did not settle the card: %+v", f.api.patched)
+	}
+}
+
+func TestIssueChatP2_ShortRunPostsNoCard(t *testing.T) {
+	f := newActivityFixture(t)
+	issue := f.fx.Issue(t, "Short run", testutil.Cols{"assignee_type": "squad", "assignee_id": f.squad})
+	f.publishIssue(protocol.EventIssueCreated, issue, nil)
+	task := uuid.NewString()
+	sent := len(f.api.sent)
+	for _, eventType := range []string{protocol.EventTaskRunning, protocol.EventTaskCompleted} {
+		f.bus.Publish(events.Event{Type: eventType, WorkspaceID: f.ws, TaskID: task, Payload: map[string]any{"task_id": task, "agent_id": f.leader, "issue_id": issue}})
+	}
+	if len(f.api.sent) != sent {
+		t.Fatalf("a short run posted a card: %+v", f.api.sent[sent:])
 	}
 }

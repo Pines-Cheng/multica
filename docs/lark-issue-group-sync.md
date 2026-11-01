@@ -169,7 +169,7 @@ if bound:
 | `comment:deleted` | 原卡片改为"该评论已删除" | 原发送者 |
 | `issue:updated` 状态/指派变更（P1） | 一行系统卡片：`状态：进行中 → 已完成` | 管家 |
 | `issue:created` 子 issue（P1） | 按 §6 开话题 | 管家 |
-| `task:*` Agent 运行进度（P2） | 每个 task 一张实时卡片，持续更新，结束时定稿 | 该 Agent 的 Bot |
+| `task:*` Agent 运行进度（P2） | 运行超过 20 秒才发卡片（Leader 分派这类短运行不打扰）；无标题，显示状态、已运行时长和最近 2 条动作（只显示动作类别，如「运行命令」「修改文件」，不暴露参数），最多每 3 秒刷新；结束时定稿为用时 + 结果评论摘要或失败原因；附「查看详情」链接 | 该 Agent 的 Bot |
 
 - **路由**：comment 所属 issue 有绑定 → 发到群主消息流，或用 `reply_in_thread` 回复到话题根。Web 上对某条 comment 的回复 → 引用回复它对应的那条飞书消息。
 - **mention 渲染**：mention 了已绑定飞书的成员时，用发送 Bot 视角下的身份生成原生 `<at>`（用户在该 Bot 下没有 open_id 时退化为粗体名字）；mention Agent 一律渲染为粗体名字，不用 `<at>` 去 @Bot，避免对方 Bot 收到事件。
