@@ -14,6 +14,8 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -68,16 +70,35 @@ var ErrIssueCommentRejected = errors.New("lark: issue comment rejected")
 type FeishuIssueChatRouter struct {
 	store  *ChannelStore
 	writer IssueCommentWriter
+	api    APIClient
+	creds  CredentialsResolver
 	logger *slog.Logger
+
+	namesMu sync.Mutex
+	names   map[pgtype.UUID]cachedBotName
 }
+
+// cachedBotName is a bot display name read from Lark, kept briefly so a busy
+// chat does not call /bot/v3/info for every mention.
+type cachedBotName struct {
+	name    string
+	fetched time.Time
+}
+
+const botNameTTL = 10 * time.Minute
 
 var _ engine.IssueChatRouter = (*FeishuIssueChatRouter)(nil)
 
-func NewFeishuIssueChatRouter(store *ChannelStore, writer IssueCommentWriter, logger *slog.Logger) *FeishuIssueChatRouter {
+// NewFeishuIssueChatRouter builds the router. api and creds may be nil; the
+// bot-name mention fallback is then off and only union_id matches resolve.
+func NewFeishuIssueChatRouter(store *ChannelStore, writer IssueCommentWriter, api APIClient, creds CredentialsResolver, logger *slog.Logger) *FeishuIssueChatRouter {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &FeishuIssueChatRouter{store: store, writer: writer, logger: logger}
+	return &FeishuIssueChatRouter{
+		store: store, writer: writer, api: api, creds: creds, logger: logger,
+		names: make(map[pgtype.UUID]cachedBotName),
+	}
 }
 
 // LookupIssueChat routes a message inside a topic by the topic's root
@@ -222,6 +243,7 @@ func (r *FeishuIssueChatRouter) renderComment(ctx context.Context, workspaceID p
 			agentByBot[inst.BotUnionID.String] = inst.AgentID
 		}
 	}
+	var agentByName map[string]pgtype.UUID
 	replacements := make(map[string]string, len(lm.Mentions))
 	for _, m := range lm.Mentions {
 		if m.Key == "" {
@@ -246,11 +268,72 @@ func (r *FeishuIssueChatRouter) renderComment(ctx context.Context, workspaceID p
 		})
 		if err == nil {
 			replacements[m.Key] = multicaMention(label, "member", binding.MulticaUserID)
+			continue
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return "", err
 		}
+		// Bots whose union_id could not be resolved at install (the contact
+		// lookup needs a contact range that covers the bot) are matched by
+		// their display name. A name shared by two bots matches neither.
+		if agentByName == nil {
+			agentByName = r.agentsByBotName(ctx, insts, agentByBot)
+		}
+		if agentID, ok := agentByName[strings.TrimSpace(m.Name)]; ok {
+			replacements[m.Key] = multicaMention(label, "agent", agentID)
+		}
 	}
 	return replaceMentionKeys(text, replacements), nil
+}
+
+// agentsByBotName maps the display name of every active bot without a known
+// union_id to its agent. Ambiguous names are left out.
+func (r *FeishuIssueChatRouter) agentsByBotName(ctx context.Context, insts []Installation, known map[string]pgtype.UUID) map[string]pgtype.UUID {
+	out := map[string]pgtype.UUID{}
+	if r.api == nil || r.creds == nil {
+		return out
+	}
+	ambiguous := map[string]bool{}
+	for _, inst := range insts {
+		if InstallationStatus(inst.Status) != InstallationActive {
+			continue
+		}
+		if _, ok := known[inst.BotUnionID.String]; ok && inst.BotUnionID.String != "" {
+			continue
+		}
+		name := strings.TrimSpace(r.botName(ctx, inst))
+		if name == "" {
+			continue
+		}
+		if _, dup := out[name]; dup || ambiguous[name] {
+			delete(out, name)
+			ambiguous[name] = true
+			continue
+		}
+		out[name] = inst.AgentID
+	}
+	return out
+}
+
+func (r *FeishuIssueChatRouter) botName(ctx context.Context, inst Installation) string {
+	r.namesMu.Lock()
+	cached, ok := r.names[inst.ID]
+	r.namesMu.Unlock()
+	if ok && time.Since(cached.fetched) < botNameTTL {
+		return cached.name
+	}
+	creds, err := installationCredentialsFor(inst, r.creds)
+	if err != nil {
+		return ""
+	}
+	info, err := r.api.GetBotInfo(ctx, creds)
+	if err != nil {
+		r.logger.Warn("lark issue chat: bot name lookup failed", "installation_id", uuidString(inst.ID), "error", err)
+		return ""
+	}
+	r.namesMu.Lock()
+	r.names[inst.ID] = cachedBotName{name: info.Name, fetched: time.Now()}
+	r.namesMu.Unlock()
+	return info.Name
 }
 
 func multicaMention(label, kind string, id pgtype.UUID) string {

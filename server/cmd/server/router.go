@@ -695,7 +695,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				// Issue-bound group chats (docs/lark-issue-group-sync.md): their
 				// messages become issue comments, and issue comments are
 				// mirrored back into the chat.
-				feishuSet.IssueChat = lark.NewFeishuIssueChatRouter(cs, h, slog.Default())
+				feishuSet.IssueChat = lark.NewFeishuIssueChatRouter(cs, h, larkClient, installSvc, slog.Default())
 				channelRouter.Register(channel.TypeFeishu, feishuSet)
 				chatAdmin, _ := larkClient.(lark.ChatAdmin)
 				issueChat := lark.NewIssueChatService(lark.IssueChatServiceConfig{

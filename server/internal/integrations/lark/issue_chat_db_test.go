@@ -127,7 +127,7 @@ func groupInbound(t *testing.T, lm InboundMessage, threadID, rootID string) chan
 
 func TestIssueChatRouter_Lookup(t *testing.T) {
 	f := newIssueChatFixture(t)
-	r := NewFeishuIssueChatRouter(f.store, &recordingCommentWriter{}, newDiscardLogger())
+	r := NewFeishuIssueChatRouter(f.store, &recordingCommentWriter{}, nil, nil, newDiscardLogger())
 	ctx := context.Background()
 
 	for _, tc := range []struct {
@@ -163,7 +163,7 @@ func TestIssueChatRouter_RecordComment(t *testing.T) {
 	f := newIssueChatFixture(t)
 	ctx := context.Background()
 	writer := &recordingCommentWriter{id: uuidFromString(t, icNewComment)}
-	r := NewFeishuIssueChatRouter(f.store, writer, newDiscardLogger())
+	r := NewFeishuIssueChatRouter(f.store, writer, nil, nil, newDiscardLogger())
 	if err := f.store.RecordChannelIssueMessage(ctx, db.RecordChannelIssueMessageParams{
 		WorkspaceID: f.binding.WorkspaceID, IssueID: f.binding.IssueID, BindingID: f.binding.ID,
 		InstallationID: f.steward.ID, ChannelMessageID: "om_parent_card",
@@ -216,6 +216,60 @@ func TestIssueChatRouter_RecordComment(t *testing.T) {
 	}
 	if len(writer.calls) != 1 {
 		t.Fatalf("replay wrote another comment (calls = %d)", len(writer.calls))
+	}
+}
+
+// namedBotsAPI answers /bot/v3/info with a display name per app.
+type namedBotsAPI struct {
+	fakeAPIClient
+	names map[string]string
+	calls int
+}
+
+func (a *namedBotsAPI) GetBotInfo(_ context.Context, creds InstallationCredentials) (BotInfo, error) {
+	a.calls++
+	return BotInfo{Name: a.names[creds.AppID]}, nil
+}
+
+// A bot whose union_id could not be resolved at install is still recognised
+// by its display name; a name two bots share resolves to neither.
+func TestIssueChatRouter_MentionFallsBackToBotName(t *testing.T) {
+	f := newIssueChatFixture(t)
+	ctx := context.Background()
+	const (
+		plannerAgent = "1c0a0000-0000-4000-8000-0000000000b1"
+		twinA        = "1c0a0000-0000-4000-8000-0000000000b2"
+		twinB        = "1c0a0000-0000-4000-8000-0000000000b3"
+	)
+	f.insertInstallation(t, plannerAgent, "cli_ic_planner", "")
+	f.insertInstallation(t, twinA, "cli_ic_twin_a", "")
+	f.insertInstallation(t, twinB, "cli_ic_twin_b", "")
+	api := &namedBotsAPI{names: map[string]string{
+		"cli_ic_planner": "Planner", "cli_ic_twin_a": "Twin", "cli_ic_twin_b": "Twin",
+	}}
+	writer := &recordingCommentWriter{id: uuidFromString(t, icNewComment)}
+	r := NewFeishuIssueChatRouter(f.store, writer, api, fakeCredentials{secret: "shh"}, newDiscardLogger())
+
+	lm := InboundMessage{
+		AppID: icStewardApp, ChatID: icChatID, ChatType: ChatTypeGroup,
+		MessageID: "om_inbound_name", MessageType: "text",
+		Content:    `{"text":"@_user_1 and @_user_2 go"}`,
+		SenderType: "user",
+		Mentions: []InboundMention{
+			{Key: "@_user_1", Name: "Planner", UnionID: "on_unknown_planner"},
+			{Key: "@_user_2", Name: "Twin", UnionID: "on_unknown_twin"},
+		},
+	}
+	route := engine.IssueChatRoute{BindingID: f.binding.ID, WorkspaceID: f.binding.WorkspaceID, IssueID: f.binding.IssueID, StewardInstallationID: f.steward.ID}
+	if err := r.RecordIssueComment(ctx, engine.ResolvedInstallation{ID: f.steward.ID}, engine.ResolvedIdentity{UserID: uuidFromString(t, icMember)}, route, groupInbound(t, lm, "", "")); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	want := "[@Planner](mention://agent/" + plannerAgent + ") and @Twin go"
+	if len(writer.calls) != 1 || writer.calls[0].Content != want {
+		t.Fatalf("content = %+v, want %q", writer.calls, want)
+	}
+	if api.calls != 3 {
+		t.Fatalf("bot info calls = %d, want one per bot without a union_id", api.calls)
 	}
 }
 
