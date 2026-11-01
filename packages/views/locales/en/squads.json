@@ -99,7 +99,9 @@
     "members": "Members",
     "created_by": "Created by",
     "created": "Created",
-    "updated": "Updated"
+    "updated": "Updated",
+    "auto_channel_chat": "Auto Feishu group",
+    "auto_channel_chat_tooltip": "Open a Feishu group when an issue is assigned to or mentions this squad. Needs the leader's Feishu bot."
   },
   "toasts": {
     "member_added": "Member added",

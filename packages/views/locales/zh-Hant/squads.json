@@ -98,7 +98,9 @@
     "members": "成員",
     "created_by": "建立者",
     "created": "建立時間",
-    "updated": "更新時間"
+    "updated": "更新時間",
+    "auto_channel_chat": "自動建飛書群組",
+    "auto_channel_chat_tooltip": "任務指派給該小組或提及該小組時，自動建立飛書群組。需要 Leader 已連接飛書 Bot。"
   },
   "toasts": {
     "member_added": "已新增成員",

@@ -99,7 +99,9 @@
     "members": "Membres",
     "created_by": "Créé par",
     "created": "Créé",
-    "updated": "Mis à jour"
+    "updated": "Mis à jour",
+    "auto_channel_chat": "Groupe Feishu automatique",
+    "auto_channel_chat_tooltip": "Crée un groupe Feishu quand une tâche est assignée à cette escouade ou la mentionne. Nécessite le bot Feishu du responsable."
   },
   "toasts": {
     "member_added": "Membre ajouté",

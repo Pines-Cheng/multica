@@ -2397,6 +2397,8 @@ export const SquadSchema = z.object({
   updated_at: z.string(),
   archived_at: z.string().nullable().optional().transform((v) => v ?? null),
   archived_by: z.string().nullable().optional().transform((v) => v ?? null),
+  // Older servers omit it; the server default is on.
+  auto_create_channel_chat: z.boolean().default(true).catch(true),
   member_count: z.number().default(0),
   member_preview: z.array(SquadMemberPreviewSchema).default([]),
 }).loose();

@@ -1,5 +1,7 @@
 "use client";
 
+import { Switch } from "@multica/ui/components/ui/switch";
+import { TooltipHint } from "@multica/ui/components/common/tooltip-hint";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@multica/core/api";
@@ -119,7 +121,7 @@ export function SquadDetailPage() {
   const [confirmArchive, setConfirmArchive] = useState(false);
 
   const updateSquadMut = useMutation({
-    mutationFn: (data: { name?: string; description?: string; instructions?: string; avatar_url?: string; leader_id?: string }) => api.updateSquad(squadId, data),
+    mutationFn: (data: { name?: string; description?: string; instructions?: string; avatar_url?: string; leader_id?: string; auto_create_channel_chat?: boolean }) => api.updateSquad(squadId, data),
     onSuccess: () => {
       refetchSquad();
       refetchMembers();
@@ -232,6 +234,7 @@ export function SquadDetailPage() {
           onUploadAvatar={(url) => updateSquadMut.mutateAsync({ avatar_url: url })}
           onRename={async (next) => { await updateSquadMut.mutateAsync({ name: next.trim() }); }}
           onUpdateDescription={async (next) => { await updateSquadMut.mutateAsync({ description: next }); }}
+          onToggleAutoChat={(next) => updateSquadMut.mutate({ auto_create_channel_chat: next })}
         />
 
         <SquadOverviewPane
@@ -717,6 +720,7 @@ function SquadDetailInspector({
   leaderName,
   creatorName,
   canManage,
+  onToggleAutoChat,
   onUploadAvatar,
   onRename,
   onUpdateDescription,
@@ -732,6 +736,7 @@ function SquadDetailInspector({
   onUploadAvatar: (url: string) => Promise<unknown>;
   onRename: (next: string) => Promise<void>;
   onUpdateDescription: (next: string) => Promise<void>;
+  onToggleAutoChat: (next: boolean) => void;
 }) {
   const { t } = useT("squads");
   const timeAgo = useTimeAgo();
@@ -808,6 +813,18 @@ function SquadDetailInspector({
           </InspectorRow>
           <InspectorRow label={t(($) => $.details.updated)}>
             <span className="text-muted-foreground">{timeAgo(squad.updated_at)}</span>
+          </InspectorRow>
+          <InspectorRow label={t(($) => $.details.auto_channel_chat)}>
+            <TooltipHint label={t(($) => $.details.auto_channel_chat_tooltip)}>
+              <Switch
+                size="sm"
+                checked={squad.auto_create_channel_chat ?? true}
+                disabled={!canManage}
+                onCheckedChange={(next) => onToggleAutoChat(next)}
+                aria-label={t(($) => $.details.auto_channel_chat)}
+                data-testid="squad-auto-channel-chat"
+              />
+            </TooltipHint>
           </InspectorRow>
         </div>
       </div>

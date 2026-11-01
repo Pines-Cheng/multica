@@ -1,6 +1,6 @@
 # Issue ↔ 飞书群双向协作
 
-> 状态：P0 已实现，并在真实飞书租户中按示例 issue 验收通过。P1、P2 未开始。
+> 状态：P0 已实现并验收通过；P1 已实现，待真实飞书验收；P2 未开始。
 
 ## 1. 目标
 
@@ -252,6 +252,17 @@ if bound:
 | 权限 | `lark/registration_addons.go`；已连接的 Agent 再次扫码会更新同一个应用（`clientID`） |
 | API | `GET/POST /api/issues/{id}/channel-chat` |
 | 前端 | issue 详情页右上角按钮 `IssueChannelChatButton`；Agent 飞书集成区的"更新飞书权限" |
+
+### P1 实现位置
+
+| 部分 | 位置 |
+|---|---|
+| Squad 开关 | 迁移 `602`（`squad.auto_create_channel_chat`，默认开启）；`PATCH` 小组接口字段同名；小组详情页「自动建飞书群」开关 |
+| 自动建群 | `lark/issue_chat_activity.go`：`issue:created` / `issue:updated`（指派变更）/ `comment:created`（@Squad）触发 `autoCreate` |
+| 子 issue 话题 | `EnsureChat` 发现已绑定的祖先时调用 `openTopic`：管家发根卡片，子 issue 绑定到该卡片；子 issue 的评论和状态通知都回复到话题里 |
+| 状态 / 指派通知 | `syncIssueChange` → `postActivity` |
+| 成员补拉 | 指派变更和开话题时调用 `inviteParticipants` |
+| 管家交接 | 指派变更时 `handover`（旧管家先拉新 Bot 入群）；管家 Bot 断开时 `currentSteward` 改用根 issue 当前的管家 |
 
 ## 16. 不做
 

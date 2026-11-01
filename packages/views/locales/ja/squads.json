@@ -98,7 +98,9 @@
     "members": "メンバー",
     "created_by": "作成者",
     "created": "作成日時",
-    "updated": "更新日時"
+    "updated": "更新日時",
+    "auto_channel_chat": "Feishu グループを自動作成",
+    "auto_channel_chat_tooltip": "タスクがこのスクワッドに割り当てられたり言及されたりしたときに Feishu グループを作成します。リーダーの Feishu ボットが必要です。"
   },
   "toasts": {
     "member_added": "メンバーを追加しました",

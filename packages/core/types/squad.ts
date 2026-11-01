@@ -21,6 +21,8 @@ export interface Squad {
   updated_at: string;
   archived_at: string | null;
   archived_by: string | null;
+  /** Opens a Feishu group for issues assigned to or @-mentioning the squad. */
+  auto_create_channel_chat?: boolean;
   member_count?: number;
   member_preview?: SquadMemberPreview[];
 }
