@@ -537,7 +537,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// is the single shared inbound handler injected into every Channel.
 	channelRegistry := channel.NewRegistry()
 	channelRouter := engine.NewRouter(h.IssueService, h.TaskService, queries, engine.RouterConfig{
-		Logger: slog.Default(), Lifecycle: h,
+		Logger: slog.Default(), Lifecycle: h, Squads: queries,
 	})
 	// Debounce the per-session run trigger so a burst of messages collapses
 	// into one agent run instead of one per message (MUL-2968).
@@ -695,6 +695,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				// Issue-bound group chats (docs/lark-issue-group-sync.md): their
 				// messages become issue comments, and issue comments are
 				// mirrored back into the chat.
+				feishuSet.IssueToLeaderSquad = true
 				feishuSet.IssueChat = lark.NewFeishuIssueChatRouter(cs, h, larkClient, installSvc, slog.Default())
 				channelRouter.Register(channel.TypeFeishu, feishuSet)
 				chatAdmin, _ := larkClient.(lark.ChatAdmin)

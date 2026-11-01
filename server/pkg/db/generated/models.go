@@ -430,6 +430,7 @@ type ChannelIssueMessage struct {
 	Kind             string             `json:"kind"`
 	CommentID        pgtype.UUID        `json:"comment_id"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	TaskID           pgtype.UUID        `json:"task_id"`
 }
 
 type ChannelMediaPendingObject struct {

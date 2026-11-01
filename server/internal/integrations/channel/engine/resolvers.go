@@ -81,6 +81,9 @@ type Result struct {
 	IssueIdentifier    string
 	IssueWorkspaceSlug string
 	IssueTitle         string
+	// IssueSquadName names the squad an /issue was handed to instead of the
+	// bot's own agent; empty when the agent kept it.
+	IssueSquadName string
 	// IssueDuplicate marks an /issue command that did not create a new issue
 	// because the shared duplicate guard found the active IssueID above.
 	// Repliers render this as a business conflict, never as an internal error.
@@ -498,6 +501,15 @@ type ResolverSet struct {
 	Typing       TypingNotifier
 	IssueChat    IssueChatRouter
 	OriginType   string
+	// IssueToLeaderSquad makes /issue hand the issue to the squad the bot's
+	// agent leads, when it leads exactly one, so the leader coordinates the
+	// work instead of doing it itself.
+	IssueToLeaderSquad bool
+}
+
+// SquadLookup finds the squads an agent leads. *db.Queries implements it.
+type SquadLookup interface {
+	ListActiveSquadsLedByAgent(ctx context.Context, arg db.ListActiveSquadsLedByAgentParams) ([]db.Squad, error)
 }
 
 // IssueCreator is the narrow subset of service.IssueService the Router needs

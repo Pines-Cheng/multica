@@ -327,6 +327,9 @@ func issueCreatedText(res DispatchResult, appURL string) string {
 	} else {
 		line = fmt.Sprintf("Created %s — %s", identifier, title)
 	}
+	if res.IssueSquadName != "" {
+		line += "\n已交给小组「" + res.IssueSquadName + "」，由 Leader 分派。"
+	}
 	// Link off IssueIdentifier, not the local display value: the "#42" fallback
 	// above is a degraded label, never a routable identifier.
 	if link := channel.IssueWebLink(appURL, res.IssueWorkspaceSlug, res.IssueIdentifier); link != "" {

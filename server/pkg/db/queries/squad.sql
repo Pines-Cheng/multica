@@ -169,3 +169,12 @@ LEFT JOIN issue i
        ON i.id = atq.issue_id
 WHERE sm.squad_id = $1
 ORDER BY sm.created_at ASC, atq.dispatched_at DESC NULLS LAST;
+
+-- name: ListActiveSquadsLedByAgent :many
+-- Squads an agent leads, so an issue handed to that agent from a chat can go
+-- to its squad instead (docs/lark-issue-group-sync.md, D3).
+SELECT * FROM squad
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND leader_id = sqlc.arg('leader_id')
+  AND archived_at IS NULL
+ORDER BY created_at ASC;

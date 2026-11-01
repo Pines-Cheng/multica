@@ -235,6 +235,55 @@ func (q *Queries) IsSquadMember(ctx context.Context, arg IsSquadMemberParams) (b
 	return is_member, err
 }
 
+const listActiveSquadsLedByAgent = `-- name: ListActiveSquadsLedByAgent :many
+SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions, auto_create_channel_chat FROM squad
+WHERE workspace_id = $1
+  AND leader_id = $2
+  AND archived_at IS NULL
+ORDER BY created_at ASC
+`
+
+type ListActiveSquadsLedByAgentParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	LeaderID    pgtype.UUID `json:"leader_id"`
+}
+
+// Squads an agent leads, so an issue handed to that agent from a chat can go
+// to its squad instead (docs/lark-issue-group-sync.md, D3).
+func (q *Queries) ListActiveSquadsLedByAgent(ctx context.Context, arg ListActiveSquadsLedByAgentParams) ([]Squad, error) {
+	rows, err := q.db.Query(ctx, listActiveSquadsLedByAgent, arg.WorkspaceID, arg.LeaderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Squad{}
+	for rows.Next() {
+		var i Squad
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Name,
+			&i.Description,
+			&i.LeaderID,
+			&i.CreatorID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ArchivedAt,
+			&i.ArchivedBy,
+			&i.AvatarUrl,
+			&i.Instructions,
+			&i.AutoCreateChannelChat,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAllSquads = `-- name: ListAllSquads :many
 SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions, auto_create_channel_chat FROM squad WHERE workspace_id = $1 ORDER BY created_at ASC
 `

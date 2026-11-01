@@ -41,6 +41,7 @@ type Router struct {
 	tasks     TaskEnqueuer
 	reader    SessionReader
 	lifecycle ChannelChatLifecycle
+	squads    SquadLookup
 
 	batcher *pendingBatcher
 
@@ -78,6 +79,9 @@ type RouterConfig struct {
 	MediaConcurrency int
 	Logger           *slog.Logger
 	Lifecycle        ChannelChatLifecycle
+	// Squads enables ResolverSet.IssueToLeaderSquad. Nil keeps every /issue
+	// on the bot's agent.
+	Squads SquadLookup
 }
 
 // NewRouter builds a Router around the shared (platform-agnostic) services:
@@ -104,6 +108,7 @@ func NewRouter(issues IssueCreator, tasks TaskEnqueuer, reader SessionReader, cf
 		tasks:        tasks,
 		reader:       reader,
 		lifecycle:    cfg.Lifecycle,
+		squads:       cfg.Squads,
 		replyTimeout: cfg.ReplyTimeout,
 		mediaTimeout: cfg.MediaTimeout,
 		mediaCtx:     mediaCtx,
@@ -672,7 +677,8 @@ func (r *Router) processClaimed(ctx context.Context, set ResolverSet, msg channe
 			// cannot race an issue agent reading the newly-created issue.
 			assignedRunFireAt = localMediaDeadline.Add(mediaFinalizeTimeout)
 		}
-		issueRes, err := r.createIssue(ctx, inst, set.OriginType, identity.UserID, sessionID, *appendRes.IssueCommand, prefix, assignedRunFireAt)
+		squad := r.leaderSquad(ctx, set, inst)
+		issueRes, err := r.createIssue(ctx, inst, set.OriginType, identity.UserID, sessionID, *appendRes.IssueCommand, prefix, assignedRunFireAt, squad)
 		if errors.Is(err, service.ErrActiveDuplicate) && issueRes.DuplicateIssue != nil {
 			duplicate := *issueRes.DuplicateIssue
 			res.IssueID = duplicate.ID
@@ -695,6 +701,9 @@ func (r *Router) processClaimed(ctx context.Context, set ResolverSet, msg channe
 			return Result{}, postAppendFinalize, fmt.Errorf("create issue from command: %w", err)
 		}
 		res.IssueID = issueRes.Issue.ID
+		if squad != nil {
+			res.IssueSquadName = squad.Name
+		}
 		mediaIssue = issueRes.Issue
 		deferredIssueTaskID = issueRes.AssignedTaskID
 		res.IssueNumber = issueRes.Issue.Number
@@ -1204,9 +1213,33 @@ func (r *Router) drop(ctx context.Context, set ResolverSet, msg channel.InboundM
 	return Result{Outcome: OutcomeDropped, DropReason: reason, InstallationID: instID}
 }
 
-func (r *Router) createIssue(ctx context.Context, inst ResolvedInstallation, originType string, creatorUserID, sessionID pgtype.UUID, cmd IssueCommand, issuePrefix string, assignedRunFireAt time.Time) (service.IssueCreateResult, error) {
+// leaderSquad is the squad an /issue goes to instead of the bot's agent: the
+// one squad that agent leads. Leading none or several keeps the agent, and a
+// failed lookup degrades to the agent rather than failing the command.
+func (r *Router) leaderSquad(ctx context.Context, set ResolverSet, inst ResolvedInstallation) *db.Squad {
+	if !set.IssueToLeaderSquad || r.squads == nil {
+		return nil
+	}
+	squads, err := r.squads.ListActiveSquadsLedByAgent(ctx, db.ListActiveSquadsLedByAgentParams{
+		WorkspaceID: inst.WorkspaceID, LeaderID: inst.AgentID,
+	})
+	if err != nil {
+		r.logger.Warn("channel engine: leader squad lookup failed", "agent_id", util.UUIDToString(inst.AgentID), "error", err)
+		return nil
+	}
+	if len(squads) != 1 {
+		return nil
+	}
+	return &squads[0]
+}
+
+func (r *Router) createIssue(ctx context.Context, inst ResolvedInstallation, originType string, creatorUserID, sessionID pgtype.UUID, cmd IssueCommand, issuePrefix string, assignedRunFireAt time.Time, squad *db.Squad) (service.IssueCreateResult, error) {
 	if cmd.Title == "" {
 		return service.IssueCreateResult{}, ErrEmptyIssueTitle
+	}
+	assigneeType, assigneeID := "agent", inst.AgentID
+	if squad != nil {
+		assigneeType, assigneeID = "squad", squad.ID
 	}
 	params := service.IssueCreateParams{
 		WorkspaceID:  inst.WorkspaceID,
@@ -1214,8 +1247,8 @@ func (r *Router) createIssue(ctx context.Context, inst ResolvedInstallation, ori
 		Description:  pgtype.Text{String: cmd.Description, Valid: cmd.Description != ""},
 		Status:       "todo",
 		Priority:     "none",
-		AssigneeType: pgtype.Text{String: "agent", Valid: true},
-		AssigneeID:   inst.AgentID,
+		AssigneeType: pgtype.Text{String: assigneeType, Valid: true},
+		AssigneeID:   assigneeID,
 		CreatorType:  "member",
 		CreatorID:    creatorUserID,
 		OriginType:   pgtype.Text{String: originType, Valid: originType != ""},

@@ -126,6 +126,9 @@ type DispatchResult struct {
 	IssueWorkspaceSlug string
 	// IssueTitle is the title supplied on /issue, echoed in the confirmation.
 	IssueTitle string
+	// IssueSquadName names the squad an /issue was handed to; empty when
+	// the bot's own agent kept it.
+	IssueSquadName string
 	// IssueDuplicate distinguishes an active-issue conflict from a successful
 	// create while carrying the existing issue fields above.
 	IssueDuplicate bool

@@ -215,7 +215,7 @@ func (q *Queries) GetChannelIssueChatByRoute(ctx context.Context, arg GetChannel
 }
 
 const getChannelIssueMessageByChannelID = `-- name: GetChannelIssueMessageByChannelID :one
-SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at FROM channel_issue_message
+SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at, task_id FROM channel_issue_message
 WHERE channel_message_id = $1
 `
 
@@ -233,12 +233,40 @@ func (q *Queries) GetChannelIssueMessageByChannelID(ctx context.Context, channel
 		&i.Kind,
 		&i.CommentID,
 		&i.CreatedAt,
+		&i.TaskID,
+	)
+	return i, err
+}
+
+const getChannelIssueMessageByTask = `-- name: GetChannelIssueMessageByTask :one
+SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at, task_id FROM channel_issue_message
+WHERE task_id = $1 AND kind = 'task'
+ORDER BY created_at ASC
+LIMIT 1
+`
+
+// The live card mirroring one agent run.
+func (q *Queries) GetChannelIssueMessageByTask(ctx context.Context, taskID pgtype.UUID) (ChannelIssueMessage, error) {
+	row := q.db.QueryRow(ctx, getChannelIssueMessageByTask, taskID)
+	var i ChannelIssueMessage
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.IssueID,
+		&i.BindingID,
+		&i.InstallationID,
+		&i.ChannelMessageID,
+		&i.Direction,
+		&i.Kind,
+		&i.CommentID,
+		&i.CreatedAt,
+		&i.TaskID,
 	)
 	return i, err
 }
 
 const listChannelIssueMessagesByComment = `-- name: ListChannelIssueMessagesByComment :many
-SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at FROM channel_issue_message
+SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at, task_id FROM channel_issue_message
 WHERE comment_id = $1
 ORDER BY created_at ASC
 `
@@ -266,6 +294,7 @@ func (q *Queries) ListChannelIssueMessagesByComment(ctx context.Context, comment
 			&i.Kind,
 			&i.CommentID,
 			&i.CreatedAt,
+			&i.TaskID,
 		); err != nil {
 			return nil, err
 		}
@@ -335,11 +364,11 @@ const recordChannelIssueMessage = `-- name: RecordChannelIssueMessage :exec
 
 INSERT INTO channel_issue_message (
     workspace_id, issue_id, binding_id, installation_id,
-    channel_message_id, direction, kind, comment_id
+    channel_message_id, direction, kind, comment_id, task_id
 ) VALUES (
     $1, $2, $3,
     $4, $5,
-    $6, $7, $8
+    $6, $7, $8, $9
 )
 ON CONFLICT (channel_message_id) DO NOTHING
 `
@@ -353,6 +382,7 @@ type RecordChannelIssueMessageParams struct {
 	Direction        string      `json:"direction"`
 	Kind             string      `json:"kind"`
 	CommentID        pgtype.UUID `json:"comment_id"`
+	TaskID           pgtype.UUID `json:"task_id"`
 }
 
 // =====================
@@ -368,6 +398,7 @@ func (q *Queries) RecordChannelIssueMessage(ctx context.Context, arg RecordChann
 		arg.Direction,
 		arg.Kind,
 		arg.CommentID,
+		arg.TaskID,
 	)
 	return err
 }
