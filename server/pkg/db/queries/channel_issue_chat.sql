@@ -44,11 +44,11 @@ WHERE channel_type = sqlc.arg('channel_type')
 -- name: RecordChannelIssueMessage :exec
 INSERT INTO channel_issue_message (
     workspace_id, issue_id, binding_id, installation_id,
-    channel_message_id, direction, kind, comment_id
+    channel_message_id, direction, kind, comment_id, task_id
 ) VALUES (
     sqlc.arg('workspace_id'), sqlc.arg('issue_id'), sqlc.arg('binding_id'),
     sqlc.arg('installation_id'), sqlc.arg('channel_message_id'),
-    sqlc.arg('direction'), sqlc.arg('kind'), sqlc.narg('comment_id')
+    sqlc.arg('direction'), sqlc.arg('kind'), sqlc.narg('comment_id'), sqlc.narg('task_id')
 )
 ON CONFLICT (channel_message_id) DO NOTHING;
 
@@ -63,6 +63,13 @@ WHERE channel_message_id = sqlc.arg('channel_message_id');
 SELECT * FROM channel_issue_message
 WHERE comment_id = sqlc.arg('comment_id')
 ORDER BY created_at ASC;
+
+-- name: GetChannelIssueMessageByTask :one
+-- The live card mirroring one agent run.
+SELECT * FROM channel_issue_message
+WHERE task_id = sqlc.arg('task_id') AND kind = 'task'
+ORDER BY created_at ASC
+LIMIT 1;
 
 -- =====================
 -- identity helpers

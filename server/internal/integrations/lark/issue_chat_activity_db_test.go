@@ -197,3 +197,31 @@ func TestIssueChatP1_ReassignmentHandsTheChatToTheNewSteward(t *testing.T) {
 		t.Fatalf("assignee notice = %+v", last)
 	}
 }
+
+// A run on an issue with a chat is one live card from the agent's own bot,
+// settled in place when the run ends.
+func TestIssueChatP2_RunIsOneLiveCard(t *testing.T) {
+	f := newActivityFixture(t)
+	issue := f.fx.Issue(t, "Run card", testutil.Cols{"assignee_type": "squad", "assignee_id": f.squad})
+	f.publishIssue(protocol.EventIssueCreated, issue, nil)
+	task := uuid.NewString()
+	run := func(eventType string, extra map[string]any) {
+		payload := map[string]any{"task_id": task, "agent_id": f.leader, "issue_id": issue}
+		for k, v := range extra {
+			payload[k] = v
+		}
+		f.bus.Publish(events.Event{Type: eventType, WorkspaceID: f.ws, TaskID: task, Payload: payload})
+	}
+	sent := len(f.api.sent)
+	run(protocol.EventTaskRunning, nil)
+	if len(f.api.sent) != sent+1 || f.api.sent[sent].InstallationID.AppID != "cli_p1_leader" {
+		t.Fatalf("running card = %+v", f.api.sent[sent:])
+	}
+	run(protocol.EventTaskCompleted, nil)
+	if len(f.api.sent) != sent+1 {
+		t.Fatal("a run must not post a second card")
+	}
+	if len(f.api.patched) == 0 || !strings.Contains(f.api.patched[len(f.api.patched)-1].CardJSON, "运行已完成") {
+		t.Fatalf("completion did not settle the card: %+v", f.api.patched)
+	}
+}

@@ -1,6 +1,6 @@
 # Issue ↔ 飞书群双向协作
 
-> 状态：P0 已实现并验收通过；P1 已实现，待真实飞书验收；P2 未开始。
+> 状态：P0、P1 已验收通过；P2 的 `/issue` 交给小组、运行进度卡片已实现，附件同步待定。
 
 ## 1. 目标
 
@@ -263,6 +263,13 @@ if bound:
 | 状态 / 指派通知 | `syncIssueChange` → `postActivity` |
 | 成员补拉 | 指派变更和开话题时调用 `inviteParticipants` |
 | 管家交接 | 指派变更时 `handover`（旧管家先拉新 Bot 入群）；管家 Bot 断开时 `currentSteward` 改用根 issue 当前的管家 |
+
+### P2 实现位置
+
+| 部分 | 位置 |
+|---|---|
+| `/issue` 交给小组 | `engine.Router.leaderSquad`：Bot 的 Agent 恰好领导一个小组时指派给该小组（`ResolverSet.IssueToLeaderSquad`，仅飞书开启）；回复注明小组名 |
+| 运行进度卡片 | `lark/issue_chat_runs.go`：`task:running` 由 Agent 自己的 Bot 发卡片，`task:progress` 最多每 3 秒更新一次，结束时定稿；迁移 `603`、`604` 为消息映射加 `task_id` |
 
 ## 16. 不做
 

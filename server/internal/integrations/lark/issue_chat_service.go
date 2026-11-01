@@ -61,6 +61,7 @@ type IssueChatServiceConfig struct {
 type IssueChatService struct {
 	cfg   IssueChatServiceConfig
 	locks sync.Map
+	runs  runCards
 }
 
 func NewIssueChatService(cfg IssueChatServiceConfig) *IssueChatService {
@@ -626,6 +627,7 @@ func (s *IssueChatService) Register(bus *events.Bus) {
 	bus.Subscribe(protocol.EventCommentCreated, s.handleSquadMention)
 	bus.Subscribe(protocol.EventIssueCreated, s.handleIssueEvent)
 	bus.Subscribe(protocol.EventIssueUpdated, s.handleIssueEvent)
+	s.registerRuns(bus)
 }
 
 // dispatch runs fn off the bus (inline in tests).
