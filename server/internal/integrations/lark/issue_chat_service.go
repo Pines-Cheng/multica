@@ -39,6 +39,7 @@ const (
 	issueChatSyncTimeout  = 15 * time.Second
 	issueChatSyncAttempts = 3
 	maxMirroredRunes      = 8000
+	maxAncestorDepth      = 16
 )
 
 // IssueChatServiceConfig wires the service. Chats may be nil when the API
@@ -81,6 +82,9 @@ type EnsureIssueChatParams struct {
 	WorkspaceID pgtype.UUID
 	IssueID     pgtype.UUID
 	ActorUserID pgtype.UUID
+	// SquadID hosts the chat on this squad's leader instead of the issue's
+	// assignee: an issue that @-mentions a squad it is not assigned to.
+	SquadID pgtype.UUID
 }
 
 // lock serializes work on one key inside this process. Cross-replica races
@@ -133,7 +137,10 @@ func (s *IssueChatService) CanHost(ctx context.Context, issue db.Issue) (bool, e
 	if s.cfg.Chats == nil {
 		return false, nil
 	}
-	_, err := s.steward(ctx, issue)
+	if _, ok, err := s.ancestorChat(ctx, issue); err != nil || ok {
+		return ok, err
+	}
+	_, err := s.steward(ctx, issue, pgtype.UUID{})
 	if errors.Is(err, ErrIssueChatNoSteward) {
 		return false, nil
 	}
@@ -156,14 +163,6 @@ func (s *IssueChatService) EnsureChat(ctx context.Context, p EnsureIssueChatPara
 	if err != nil {
 		return IssueChat{}, err
 	}
-	plan, err := s.planChat(ctx, issue, p.ActorUserID)
-	if err != nil {
-		return IssueChat{}, err
-	}
-	creds, err := installationCredentialsFor(plan.steward, s.cfg.Credentials)
-	if err != nil {
-		return IssueChat{}, err
-	}
 	ws, err := s.cfg.Store.GetWorkspace(ctx, issue.WorkspaceID)
 	if err != nil {
 		return IssueChat{}, err
@@ -171,6 +170,21 @@ func (s *IssueChatService) EnsureChat(ctx context.Context, p EnsureIssueChatPara
 	identifier := service.IssueIdentifier(ws.IssuePrefix, issue.Number)
 	issueLink := channel.IssueWebLink(s.cfg.AppURL, ws.Slug, identifier)
 
+	// A sub-issue of an issue that already has a chat becomes a topic there.
+	if ancestor, ok, err := s.ancestorChat(ctx, issue); err != nil {
+		return IssueChat{}, err
+	} else if ok {
+		return s.openTopic(ctx, ancestor, issue, ws.IssuePrefix, identifier, issueLink, p.ActorUserID)
+	}
+
+	plan, err := s.planChat(ctx, issue, p.SquadID, p.ActorUserID)
+	if err != nil {
+		return IssueChat{}, err
+	}
+	creds, err := installationCredentialsFor(plan.steward, s.cfg.Credentials)
+	if err != nil {
+		return IssueChat{}, err
+	}
 	createBots := plan.botAppIDs
 	if len(createBots) > maxBotsPerChatRequest {
 		createBots = createBots[:maxBotsPerChatRequest]
@@ -187,11 +201,7 @@ func (s *IssueChatService) EnsureChat(ctx context.Context, p EnsureIssueChatPara
 	if err != nil {
 		return IssueChat{}, err
 	}
-	for rest := plan.botAppIDs[len(createBots):]; len(rest) > 0; {
-		n := min(len(rest), maxBotsPerChatRequest)
-		s.addMembers(ctx, creds, chatID, MemberIDTypeAppID, rest[:n])
-		rest = rest[n:]
-	}
+	s.addBots(ctx, creds, chatID, plan.botAppIDs[len(createBots):])
 	s.addMembers(ctx, creds, chatID, plan.extraIDType, plan.extraUsers)
 
 	row, err := s.cfg.Store.CreateChannelIssueChat(ctx, db.CreateChannelIssueChatParams{
@@ -217,6 +227,91 @@ func (s *IssueChatService) EnsureChat(ctx context.Context, p EnsureIssueChatPara
 	return s.chatView(ctx, row), nil
 }
 
+// ancestorChat finds the nearest ancestor of issue bound to a chat.
+func (s *IssueChatService) ancestorChat(ctx context.Context, issue db.Issue) (db.ChannelIssueChat, bool, error) {
+	parentID := issue.ParentIssueID
+	for depth := 0; parentID.Valid && depth < maxAncestorDepth; depth++ {
+		row, err := s.cfg.Store.GetChannelIssueChatByIssue(ctx, db.GetChannelIssueChatByIssueParams{IssueID: parentID, ChannelType: channelTypeFeishu})
+		if err == nil && row.Status == "active" {
+			return row, true, nil
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return db.ChannelIssueChat{}, false, err
+		}
+		parent, err := s.cfg.Store.GetIssue(ctx, parentID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			break
+		}
+		if err != nil {
+			return db.ChannelIssueChat{}, false, err
+		}
+		parentID = parent.ParentIssueID
+	}
+	return db.ChannelIssueChat{}, false, nil
+}
+
+// openTopic binds a sub-issue to a topic in its ancestor's chat: the steward
+// posts a root card, and the sub-issue's timeline threads under it. Its
+// participants are added to the chat when missing.
+func (s *IssueChatService) openTopic(ctx context.Context, ancestor db.ChannelIssueChat, issue db.Issue, prefix, identifier, issueLink string, actor pgtype.UUID) (IssueChat, error) {
+	steward, err := s.cfg.Store.GetLarkInstallation(ctx, ancestor.StewardInstallationID)
+	if err != nil {
+		return IssueChat{}, err
+	}
+	creds, err := installationCredentialsFor(steward, s.cfg.Credentials)
+	if err != nil {
+		return IssueChat{}, err
+	}
+	path := identifier
+	if root, err := s.cfg.Store.GetIssue(ctx, ancestor.IssueID); err == nil {
+		path = service.IssueIdentifier(prefix, root.Number) + " › " + identifier
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "**子任务 %s %s**\n状态：%s", path, issue.Title, statusLabel(issue.Status))
+	if name := s.assigneeName(ctx, issue); name != "" {
+		fmt.Fprintf(&b, " · 负责人：%s", name)
+	}
+	if issueLink != "" {
+		fmt.Fprintf(&b, "\n[在 Multica 中打开](%s)", issueLink)
+	}
+	b.WriteString("\n\n在本话题内的发言会同步为该子任务的评论。")
+	card, err := issueChatCardJSON("", "", b.String())
+	if err != nil {
+		return IssueChat{}, err
+	}
+	rootMsg, err := s.cfg.API.SendInteractiveCard(ctx, SendCardParams{InstallationID: creds, ChatID: ChatID(ancestor.ChatID), CardJSON: card})
+	if err != nil {
+		return IssueChat{}, err
+	}
+	row, err := s.cfg.Store.CreateChannelIssueChat(ctx, db.CreateChannelIssueChatParams{
+		WorkspaceID:           issue.WorkspaceID,
+		IssueID:               issue.ID,
+		RootIssueID:           ancestor.RootIssueID,
+		ChannelType:           channelTypeFeishu,
+		ChatID:                ancestor.ChatID,
+		ThreadRootMessageID:   rootMsg,
+		StewardInstallationID: ancestor.StewardInstallationID,
+		CreatedBy:             actor,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		chat, _, gerr := s.GetChat(ctx, issue.ID)
+		return chat, gerr
+	}
+	if err != nil {
+		return IssueChat{}, err
+	}
+	if rerr := s.cfg.Store.RecordChannelIssueMessage(ctx, db.RecordChannelIssueMessageParams{
+		WorkspaceID: row.WorkspaceID, IssueID: row.IssueID, BindingID: row.ID,
+		InstallationID: steward.ID, ChannelMessageID: rootMsg,
+		Direction: issueMessageOutbound, Kind: issueMessageKindThreadRoot,
+	}); rerr != nil {
+		s.cfg.Logger.Warn("lark issue chat: record topic root failed", "issue_id", uuidString(issue.ID), "error", rerr)
+	}
+	agents, users := s.participants(ctx, issue, pgtype.UUID{})
+	s.inviteParticipants(ctx, steward, creds, ChatID(ancestor.ChatID), agents, append(users, actor))
+	return s.chatView(ctx, row), nil
+}
+
 func (s *IssueChatService) addMembers(ctx context.Context, creds InstallationCredentials, chatID ChatID, idType string, ids []string) {
 	if len(ids) == 0 {
 		return
@@ -225,6 +320,14 @@ func (s *IssueChatService) addMembers(ctx context.Context, creds InstallationCre
 	if err != nil || len(invalid) > 0 {
 		s.cfg.Logger.Warn("lark issue chat: some members could not be added",
 			"chat_id", string(chatID), "id_type", idType, "invalid", invalid, "error", err)
+	}
+}
+
+func (s *IssueChatService) addBots(ctx context.Context, creds InstallationCredentials, chatID ChatID, appIDs []string) {
+	for len(appIDs) > 0 {
+		n := min(len(appIDs), maxBotsPerChatRequest)
+		s.addMembers(ctx, creds, chatID, MemberIDTypeAppID, appIDs[:n])
+		appIDs = appIDs[n:]
 	}
 }
 
@@ -251,24 +354,13 @@ type chatPlan struct {
 	uninvited    []string
 }
 
-// steward picks the bot that owns the chat: the squad leader's for a squad
-// issue, otherwise the assignee agent's.
-func (s *IssueChatService) steward(ctx context.Context, issue db.Issue) (Installation, error) {
-	var agentID pgtype.UUID
-	switch issue.AssigneeType.String {
-	case "squad":
-		squad, err := s.cfg.Store.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{ID: issue.AssigneeID, WorkspaceID: issue.WorkspaceID})
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Installation{}, ErrIssueChatNoSteward
-		}
-		if err != nil {
-			return Installation{}, err
-		}
-		agentID = squad.LeaderID
-	case "agent":
-		agentID = issue.AssigneeID
-	default:
-		return Installation{}, ErrIssueChatNoSteward
+// steward picks the bot that owns the chat: the leader's of hostSquad when
+// given (an @-mentioned squad), else of the issue's squad, else the assignee
+// agent's.
+func (s *IssueChatService) steward(ctx context.Context, issue db.Issue, hostSquad pgtype.UUID) (Installation, error) {
+	agentID, err := s.stewardAgent(ctx, issue, hostSquad)
+	if err != nil {
+		return Installation{}, err
 	}
 	inst, ok, err := s.agentInstallation(ctx, issue.WorkspaceID, agentID)
 	if err != nil {
@@ -278,6 +370,27 @@ func (s *IssueChatService) steward(ctx context.Context, issue db.Issue) (Install
 		return Installation{}, ErrIssueChatNoSteward
 	}
 	return inst, nil
+}
+
+func (s *IssueChatService) stewardAgent(ctx context.Context, issue db.Issue, hostSquad pgtype.UUID) (pgtype.UUID, error) {
+	squadID := hostSquad
+	if !squadID.Valid && issue.AssigneeType.String == "squad" {
+		squadID = issue.AssigneeID
+	}
+	if squadID.Valid {
+		squad, err := s.cfg.Store.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{ID: squadID, WorkspaceID: issue.WorkspaceID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return pgtype.UUID{}, ErrIssueChatNoSteward
+		}
+		if err != nil {
+			return pgtype.UUID{}, err
+		}
+		return squad.LeaderID, nil
+	}
+	if issue.AssigneeType.String == "agent" {
+		return issue.AssigneeID, nil
+	}
+	return pgtype.UUID{}, ErrIssueChatNoSteward
 }
 
 func (s *IssueChatService) agentInstallation(ctx context.Context, workspaceID, agentID pgtype.UUID) (Installation, bool, error) {
@@ -297,82 +410,150 @@ func (s *IssueChatService) agentInstallation(ctx context.Context, workspaceID, a
 	return inst, err == nil, err
 }
 
-func (s *IssueChatService) planChat(ctx context.Context, issue db.Issue, actor pgtype.UUID) (chatPlan, error) {
-	steward, err := s.steward(ctx, issue)
-	if err != nil {
-		return chatPlan{}, err
+// participants are the agents and members an issue's chat should hold: the
+// squad's (hostSquad, else the assignee squad) agents and members, or the
+// assignee agent / member, plus a member creator.
+func (s *IssueChatService) participants(ctx context.Context, issue db.Issue, hostSquad pgtype.UUID) (agents, users []pgtype.UUID) {
+	squadID := hostSquad
+	if !squadID.Valid && issue.AssigneeType.String == "squad" {
+		squadID = issue.AssigneeID
 	}
-	plan := chatPlan{steward: steward}
-	var agentIDs, userIDs []pgtype.UUID
+	if squadID.Valid {
+		if squad, err := s.cfg.Store.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{ID: squadID, WorkspaceID: issue.WorkspaceID}); err == nil {
+			agents = append(agents, squad.LeaderID)
+		}
+		if members, err := s.cfg.Store.ListSquadMembers(ctx, squadID); err == nil {
+			for _, m := range members {
+				switch m.MemberType {
+				case "agent":
+					agents = append(agents, m.MemberID)
+				case "member":
+					users = append(users, m.MemberID)
+				}
+			}
+		}
+	}
+	switch issue.AssigneeType.String {
+	case "agent":
+		agents = append(agents, issue.AssigneeID)
+	case "member":
+		users = append(users, issue.AssigneeID)
+	}
+	if issue.CreatorType == "member" {
+		users = append(users, issue.CreatorID)
+	}
+	return uniqueUUIDs(agents), uniqueUUIDs(users)
+}
+
+func (s *IssueChatService) assigneeName(ctx context.Context, issue db.Issue) string {
 	switch issue.AssigneeType.String {
 	case "squad":
 		if squad, err := s.cfg.Store.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{ID: issue.AssigneeID, WorkspaceID: issue.WorkspaceID}); err == nil {
-			plan.assignee = squad.Name
-		}
-		members, err := s.cfg.Store.ListSquadMembers(ctx, issue.AssigneeID)
-		if err != nil {
-			return chatPlan{}, err
-		}
-		for _, m := range members {
-			if m.MemberType == "agent" {
-				agentIDs = append(agentIDs, m.MemberID)
-			} else if m.MemberType == "member" {
-				userIDs = append(userIDs, m.MemberID)
-			}
+			return squad.Name
 		}
 	case "agent":
 		if agent, err := s.cfg.Store.GetAgent(ctx, issue.AssigneeID); err == nil {
-			plan.assignee = agent.Name
+			return agent.Name
+		}
+	case "member":
+		if u, err := s.cfg.Store.GetUser(ctx, issue.AssigneeID); err == nil {
+			return u.Name
 		}
 	}
-	if issue.CreatorType == "member" {
-		userIDs = append(userIDs, issue.CreatorID)
-	}
-	userIDs = append(userIDs, actor)
+	return ""
+}
 
+// invitees resolves agents to bot app ids (steward excluded, capped at the
+// group's bot limit) and members to their Feishu ids.
+type invitees struct {
+	botAppIDs []string
+	openIDs   map[string]string // member -> open_id on the steward bot
+	unionIDs  map[string]string // member -> union_id
+	order     []pgtype.UUID
+}
+
+func (s *IssueChatService) resolveInvitees(ctx context.Context, workspaceID pgtype.UUID, steward Installation, agents, users []pgtype.UUID) (invitees, error) {
+	out := invitees{openIDs: map[string]string{}, unionIDs: map[string]string{}, order: uniqueUUIDs(users)}
 	seenApp := map[string]bool{steward.AppID: true}
-	for _, agentID := range agentIDs {
-		inst, ok, err := s.agentInstallation(ctx, issue.WorkspaceID, agentID)
+	for _, agentID := range agents {
+		inst, ok, err := s.agentInstallation(ctx, workspaceID, agentID)
 		if err != nil {
-			return chatPlan{}, err
+			return invitees{}, err
 		}
-		if !ok || seenApp[inst.AppID] || len(plan.botAppIDs) >= maxBotsPerChat-1 {
+		if !ok || seenApp[inst.AppID] || len(out.botAppIDs) >= maxBotsPerChat-1 {
 			continue
 		}
 		seenApp[inst.AppID] = true
-		plan.botAppIDs = append(plan.botAppIDs, inst.AppID)
+		out.botAppIDs = append(out.botAppIDs, inst.AppID)
 	}
-
-	userIDs = uniqueUUIDs(userIDs)
+	if len(out.order) == 0 {
+		return out, nil
+	}
 	bindings, err := s.cfg.Store.ListChannelUserBindingsForUsers(ctx, db.ListChannelUserBindingsForUsersParams{
-		WorkspaceID: issue.WorkspaceID, ChannelType: channelTypeFeishu,
-		UserIds: userIDs, PreferredInstallationID: steward.ID,
+		WorkspaceID: workspaceID, ChannelType: channelTypeFeishu,
+		UserIds: out.order, PreferredInstallationID: steward.ID,
 	})
 	if err != nil {
-		return chatPlan{}, err
+		return invitees{}, err
 	}
-	openIDs, unionIDs := map[string]string{}, map[string]string{}
 	for _, row := range bindings {
 		b, err := userBindingFromRow(row)
 		if err != nil {
 			continue
 		}
 		key := uuidString(b.MulticaUserID)
-		if b.InstallationID == steward.ID && openIDs[key] == "" {
-			openIDs[key] = b.ChannelUserID
+		if b.InstallationID == steward.ID && out.openIDs[key] == "" {
+			out.openIDs[key] = b.ChannelUserID
 		}
-		if b.UnionID.String != "" && unionIDs[key] == "" {
-			unionIDs[key] = b.UnionID.String
+		if b.UnionID.String != "" && out.unionIDs[key] == "" {
+			out.unionIDs[key] = b.UnionID.String
 		}
 	}
+	return out, nil
+}
+
+// inviteParticipants adds agents' bots and members to an existing chat.
+// Lark ignores ids already in the chat; failures are logged, not fatal.
+func (s *IssueChatService) inviteParticipants(ctx context.Context, steward Installation, creds InstallationCredentials, chatID ChatID, agents, users []pgtype.UUID) {
+	inv, err := s.resolveInvitees(ctx, steward.WorkspaceID, steward, agents, users)
+	if err != nil {
+		s.cfg.Logger.Warn("lark issue chat: resolve invitees failed", "chat_id", string(chatID), "error", err)
+		return
+	}
+	s.addBots(ctx, creds, chatID, inv.botAppIDs)
+	var open, union []string
+	for _, id := range inv.order {
+		key := uuidString(id)
+		if v := inv.openIDs[key]; v != "" {
+			open = append(open, v)
+		} else if v := inv.unionIDs[key]; v != "" {
+			union = append(union, v)
+		}
+	}
+	s.addMembers(ctx, creds, chatID, MemberIDTypeOpenID, open)
+	s.addMembers(ctx, creds, chatID, MemberIDTypeUnionID, union)
+}
+
+func (s *IssueChatService) planChat(ctx context.Context, issue db.Issue, hostSquad, actor pgtype.UUID) (chatPlan, error) {
+	steward, err := s.steward(ctx, issue, hostSquad)
+	if err != nil {
+		return chatPlan{}, err
+	}
+	plan := chatPlan{steward: steward, assignee: s.assigneeName(ctx, issue)}
+	agents, users := s.participants(ctx, issue, hostSquad)
+	inv, err := s.resolveInvitees(ctx, issue.WorkspaceID, steward, agents, append(users, actor))
+	if err != nil {
+		return chatPlan{}, err
+	}
+	plan.botAppIDs = inv.botAppIDs
 	actorKey := uuidString(actor)
 	plan.createIDType, plan.extraIDType = MemberIDTypeOpenID, MemberIDTypeUnionID
-	if openIDs[actorKey] == "" && unionIDs[actorKey] != "" {
+	if inv.openIDs[actorKey] == "" && inv.unionIDs[actorKey] != "" {
 		plan.createIDType, plan.extraIDType = MemberIDTypeUnionID, MemberIDTypeOpenID
 	}
-	for _, id := range userIDs {
+	for _, id := range inv.order {
 		key := uuidString(id)
-		byType := map[string]string{MemberIDTypeOpenID: openIDs[key], MemberIDTypeUnionID: unionIDs[key]}
+		byType := map[string]string{MemberIDTypeOpenID: inv.openIDs[key], MemberIDTypeUnionID: inv.unionIDs[key]}
 		switch {
 		case byType[plan.createIDType] != "":
 			plan.createUsers = append(plan.createUsers, byType[plan.createIDType])
@@ -407,7 +588,7 @@ func uniqueUUIDs(ids []pgtype.UUID) []pgtype.UUID {
 func (s *IssueChatService) sendIntro(ctx context.Context, creds InstallationCredentials, row db.ChannelIssueChat, issue db.Issue, identifier, issueLink string, plan chatPlan) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "**%s %s**\n", identifier, issue.Title)
-	fmt.Fprintf(&b, "状态：%s", issue.Status)
+	fmt.Fprintf(&b, "状态：%s", statusLabel(issue.Status))
 	if plan.assignee != "" {
 		fmt.Fprintf(&b, " · 负责人：%s", plan.assignee)
 	}
@@ -442,6 +623,18 @@ func (s *IssueChatService) Register(bus *events.Bus) {
 	bus.Subscribe(protocol.EventCommentCreated, s.handleEvent)
 	bus.Subscribe(protocol.EventCommentUpdated, s.handleEvent)
 	bus.Subscribe(protocol.EventCommentDeleted, s.handleEvent)
+	bus.Subscribe(protocol.EventCommentCreated, s.handleSquadMention)
+	bus.Subscribe(protocol.EventIssueCreated, s.handleIssueEvent)
+	bus.Subscribe(protocol.EventIssueUpdated, s.handleIssueEvent)
+}
+
+// dispatch runs fn off the bus (inline in tests).
+func (s *IssueChatService) dispatch(fn func()) {
+	if s.cfg.Synchronous {
+		fn()
+		return
+	}
+	go fn()
 }
 
 // commentEvent is the slice of a comment event payload the mirror reads. The
@@ -490,11 +683,7 @@ func (s *IssueChatService) handleEvent(e events.Event) {
 	if !ok {
 		return
 	}
-	if s.cfg.Synchronous {
-		s.runJob(job)
-		return
-	}
-	go s.runJob(job)
+	s.dispatch(func() { s.runJob(job) })
 }
 
 // errSyncPermanent ends retries for a job that cannot succeed.
@@ -542,15 +731,9 @@ func (s *IssueChatService) syncComment(ctx context.Context, job commentSyncJob) 
 	if binding.Status != "active" {
 		return nil
 	}
-	steward, err := s.cfg.Store.GetLarkInstallation(ctx, binding.StewardInstallationID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
+	steward, ok, err := s.currentSteward(ctx, &binding)
+	if err != nil || !ok {
 		return err
-	}
-	if InstallationStatus(steward.Status) != InstallationActive {
-		return nil
 	}
 	mirrored, err := s.cfg.Store.ListChannelIssueMessagesByComment(ctx, commentID)
 	if err != nil {
