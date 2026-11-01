@@ -22,20 +22,23 @@ import (
 // ── Response types ──────────────────────────────────────────────────────────
 
 type SquadResponse struct {
-	ID            string                       `json:"id"`
-	WorkspaceID   string                       `json:"workspace_id"`
-	Name          string                       `json:"name"`
-	Description   string                       `json:"description"`
-	Instructions  string                       `json:"instructions"`
-	AvatarURL     *string                      `json:"avatar_url"`
-	LeaderID      string                       `json:"leader_id"`
-	CreatorID     string                       `json:"creator_id"`
-	CreatedAt     string                       `json:"created_at"`
-	UpdatedAt     string                       `json:"updated_at"`
-	ArchivedAt    *string                      `json:"archived_at"`
-	ArchivedBy    *string                      `json:"archived_by"`
-	MemberCount   int                          `json:"member_count"`
-	MemberPreview []SquadMemberPreviewResponse `json:"member_preview"`
+	ID           string  `json:"id"`
+	WorkspaceID  string  `json:"workspace_id"`
+	Name         string  `json:"name"`
+	Description  string  `json:"description"`
+	Instructions string  `json:"instructions"`
+	AvatarURL    *string `json:"avatar_url"`
+	LeaderID     string  `json:"leader_id"`
+	CreatorID    string  `json:"creator_id"`
+	CreatedAt    string  `json:"created_at"`
+	UpdatedAt    string  `json:"updated_at"`
+	ArchivedAt   *string `json:"archived_at"`
+	ArchivedBy   *string `json:"archived_by"`
+	// AutoCreateChannelChat opens a Feishu group for an issue assigned to
+	// (or @-mentioning) this squad.
+	AutoCreateChannelChat bool                         `json:"auto_create_channel_chat"`
+	MemberCount           int                          `json:"member_count"`
+	MemberPreview         []SquadMemberPreviewResponse `json:"member_preview"`
 }
 
 type SquadMemberPreviewResponse struct {
@@ -62,19 +65,20 @@ type SquadMemberResponse struct {
 
 func (h *Handler) squadToResponse(s db.Squad) SquadResponse {
 	return SquadResponse{
-		ID:            uuidToString(s.ID),
-		WorkspaceID:   uuidToString(s.WorkspaceID),
-		Name:          s.Name,
-		Description:   s.Description,
-		Instructions:  s.Instructions,
-		AvatarURL:     h.resolveAvatarURLPtr(textToPtr(s.AvatarUrl)),
-		LeaderID:      uuidToString(s.LeaderID),
-		CreatorID:     uuidToString(s.CreatorID),
-		CreatedAt:     timestampToString(s.CreatedAt),
-		UpdatedAt:     timestampToString(s.UpdatedAt),
-		ArchivedAt:    timestampToPtr(s.ArchivedAt),
-		ArchivedBy:    uuidToPtr(s.ArchivedBy),
-		MemberPreview: []SquadMemberPreviewResponse{},
+		ID:                    uuidToString(s.ID),
+		WorkspaceID:           uuidToString(s.WorkspaceID),
+		Name:                  s.Name,
+		Description:           s.Description,
+		Instructions:          s.Instructions,
+		AvatarURL:             h.resolveAvatarURLPtr(textToPtr(s.AvatarUrl)),
+		LeaderID:              uuidToString(s.LeaderID),
+		CreatorID:             uuidToString(s.CreatorID),
+		CreatedAt:             timestampToString(s.CreatedAt),
+		UpdatedAt:             timestampToString(s.UpdatedAt),
+		ArchivedAt:            timestampToPtr(s.ArchivedAt),
+		ArchivedBy:            uuidToPtr(s.ArchivedBy),
+		AutoCreateChannelChat: s.AutoCreateChannelChat,
+		MemberPreview:         []SquadMemberPreviewResponse{},
 	}
 }
 
@@ -357,11 +361,12 @@ func (h *Handler) UpdateSquad(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name         *string `json:"name"`
-		Description  *string `json:"description"`
-		Instructions *string `json:"instructions"`
-		LeaderID     *string `json:"leader_id"`
-		AvatarURL    *string `json:"avatar_url"`
+		Name                  *string `json:"name"`
+		Description           *string `json:"description"`
+		Instructions          *string `json:"instructions"`
+		LeaderID              *string `json:"leader_id"`
+		AvatarURL             *string `json:"avatar_url"`
+		AutoCreateChannelChat *bool   `json:"auto_create_channel_chat"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -377,6 +382,9 @@ func (h *Handler) UpdateSquad(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Instructions != nil {
 		params.Instructions = pgtype.Text{String: *req.Instructions, Valid: true}
+	}
+	if req.AutoCreateChannelChat != nil {
+		params.AutoCreateChannelChat = pgtype.Bool{Bool: *req.AutoCreateChannelChat, Valid: true}
 	}
 	if req.AvatarURL != nil {
 		accepted, ok := h.acceptAvatarURL(w, r, *req.AvatarURL, squad.AvatarUrl.String)

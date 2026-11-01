@@ -21,6 +21,13 @@ SELECT * FROM channel_issue_chat
 WHERE issue_id = sqlc.arg('issue_id')
   AND channel_type = sqlc.arg('channel_type');
 
+-- name: SetChannelIssueChatSteward :exec
+-- Hands every binding of one chat (its root issue and sub-issue topics) to
+-- a new steward installation.
+UPDATE channel_issue_chat
+SET steward_installation_id = sqlc.arg('steward_installation_id'), updated_at = now()
+WHERE channel_type = sqlc.arg('channel_type') AND chat_id = sqlc.arg('chat_id');
+
 -- name: GetChannelIssueChatByRoute :one
 -- Inbound routing: a chat-level message uses thread_root_message_id = '',
 -- a message inside a topic uses the topic's root message id.

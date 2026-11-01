@@ -11,29 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const channelIssueChatExistsForChat = `-- name: ChannelIssueChatExistsForChat :one
-SELECT EXISTS (
-    SELECT 1 FROM channel_issue_chat
-    WHERE channel_type = $1
-      AND chat_id = $2
-      AND status = 'active'
-) AS bound
-`
-
-type ChannelIssueChatExistsForChatParams struct {
-	ChannelType string `json:"channel_type"`
-	ChatID      string `json:"chat_id"`
-}
-
-// Whether any issue is bound to this chat (chat level or topic). Lets a
-// non-steward bot stand down for the whole chat, not only bound topics.
-func (q *Queries) ChannelIssueChatExistsForChat(ctx context.Context, arg ChannelIssueChatExistsForChatParams) (bool, error) {
-	row := q.db.QueryRow(ctx, channelIssueChatExistsForChat, arg.ChannelType, arg.ChatID)
-	var bound bool
-	err := row.Scan(&bound)
-	return bound, err
-}
-
 const createChannelIssueChat = `-- name: CreateChannelIssueChat :one
 
 INSERT INTO channel_issue_chat (
@@ -392,5 +369,24 @@ func (q *Queries) RecordChannelIssueMessage(ctx context.Context, arg RecordChann
 		arg.Kind,
 		arg.CommentID,
 	)
+	return err
+}
+
+const setChannelIssueChatSteward = `-- name: SetChannelIssueChatSteward :exec
+UPDATE channel_issue_chat
+SET steward_installation_id = $1, updated_at = now()
+WHERE channel_type = $2 AND chat_id = $3
+`
+
+type SetChannelIssueChatStewardParams struct {
+	StewardInstallationID pgtype.UUID `json:"steward_installation_id"`
+	ChannelType           string      `json:"channel_type"`
+	ChatID                string      `json:"chat_id"`
+}
+
+// Hands every binding of one chat (its root issue and sub-issue topics) to
+// a new steward installation.
+func (q *Queries) SetChannelIssueChatSteward(ctx context.Context, arg SetChannelIssueChatStewardParams) error {
+	_, err := q.db.Exec(ctx, setChannelIssueChatSteward, arg.StewardInstallationID, arg.ChannelType, arg.ChatID)
 	return err
 }
