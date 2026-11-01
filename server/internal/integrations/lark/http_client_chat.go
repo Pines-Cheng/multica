@@ -15,6 +15,8 @@ import (
 type ChatAdmin interface {
 	CreateChat(ctx context.Context, creds InstallationCredentials, p CreateChatParams) (ChatID, error)
 	AddChatMembers(ctx context.Context, creds InstallationCredentials, p AddChatMembersParams) (invalid []string, err error)
+	// AddChatURLTab pins a URL as a tab at the top of the chat.
+	AddChatURLTab(ctx context.Context, creds InstallationCredentials, chatID ChatID, name, url string) error
 }
 
 // Lark id types accepted by the chat endpoints.
@@ -134,6 +136,30 @@ func (c *httpAPIClient) AddChatMembers(ctx context.Context, creds InstallationCr
 		return nil, &APIError{Op: "add chat members", Code: resp.Code, Msg: resp.Msg}
 	}
 	return append(resp.Data.InvalidIDList, resp.Data.NotExistedList...), nil
+}
+
+// AddChatURLTab calls POST /open-apis/im/v1/chats/{chat_id}/chat_tabs.
+func (c *httpAPIClient) AddChatURLTab(ctx context.Context, creds InstallationCredentials, chatID ChatID, name, tabURL string) error {
+	body := map[string]any{"chat_tabs": []map[string]any{{
+		"tab_name":    name,
+		"tab_type":    "url",
+		"tab_content": map[string]string{"url": tabURL},
+	}}}
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	path := "/open-apis/im/v1/chats/" + url.PathEscape(string(chatID)) + "/chat_tabs"
+	if err := c.doAuthedJSON(ctx, creds, http.MethodPost, path, body, &resp); err != nil {
+		return fmt.Errorf("lark http client: add chat tab: %w", err)
+	}
+	if resp.Code != 0 {
+		if isTokenError(resp.Code) {
+			c.invalidateToken(creds.AppID)
+		}
+		return &APIError{Op: "add chat tab", Code: resp.Code, Msg: resp.Msg}
+	}
+	return nil
 }
 
 var _ ChatAdmin = (*httpAPIClient)(nil)

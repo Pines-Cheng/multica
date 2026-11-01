@@ -224,6 +224,11 @@ func (s *IssueChatService) EnsureChat(ctx context.Context, p EnsureIssueChatPara
 	if err != nil {
 		return IssueChat{}, err
 	}
+	if issueLink != "" {
+		if err := s.cfg.Chats.AddChatURLTab(ctx, creds, chatID, "任务详情", issueLink); err != nil {
+			s.cfg.Logger.Warn("lark issue chat: add task tab failed", "chat_id", string(chatID), "error", err)
+		}
+	}
 	s.sendIntro(ctx, creds, row, issue, identifier, issueLink, plan)
 	return s.chatView(ctx, row), nil
 }
@@ -273,7 +278,7 @@ func (s *IssueChatService) openTopic(ctx context.Context, ancestor db.ChannelIss
 		fmt.Fprintf(&b, " · 负责人：%s", name)
 	}
 	if issueLink != "" {
-		fmt.Fprintf(&b, "\n[在 Multica 中打开](%s)", issueLink)
+		fmt.Fprintf(&b, "\n[查看任务详情](%s)", issueLink)
 	}
 	b.WriteString("\n\n在本话题内的发言会同步为该子任务的评论。")
 	card, err := issueChatCardJSON("", "", b.String())
@@ -594,7 +599,7 @@ func (s *IssueChatService) sendIntro(ctx context.Context, creds InstallationCred
 		fmt.Fprintf(&b, " · 负责人：%s", plan.assignee)
 	}
 	if issueLink != "" {
-		fmt.Fprintf(&b, "\n[在 Multica 中打开](%s)", issueLink)
+		fmt.Fprintf(&b, "\n[查看任务详情](%s)", issueLink)
 	}
 	b.WriteString("\n\n群里的发言会同步为该任务的评论，任务的评论也会同步到群里。@ 某个 Agent 即可让它开始处理。")
 	if len(plan.uninvited) > 0 {

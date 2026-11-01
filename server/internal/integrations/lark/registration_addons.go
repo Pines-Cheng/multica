@@ -11,10 +11,12 @@ import (
 // registrationAddons are the scopes requested on top of Lark's PersonalAgent
 // base template, which already grants chat creation. Issue-bound chats need
 // the steward bot to read every person's message in the group (not only
-// @-mentions) and to add members after creation.
+// @-mentions), to add members after creation, and to pin the issue as a
+// chat tab.
 var registrationAddons = []string{
 	"im:message.group_msg",
 	"im:chat.members:write_only",
+	"im:chat.tabs:write_only",
 }
 
 // encodeRegistrationAddons encodes tenant scopes the way the upstream SDK

@@ -19,6 +19,7 @@ type fakeChats struct {
 	mu      sync.Mutex
 	created []CreateChatParams
 	added   []AddChatMembersParams
+	tabs    []string
 }
 
 func (f *fakeChats) CreateChat(_ context.Context, _ InstallationCredentials, p CreateChatParams) (ChatID, error) {
@@ -26,6 +27,13 @@ func (f *fakeChats) CreateChat(_ context.Context, _ InstallationCredentials, p C
 	defer f.mu.Unlock()
 	f.created = append(f.created, p)
 	return ChatID("oc_auto_" + p.UUID), nil
+}
+
+func (f *fakeChats) AddChatURLTab(_ context.Context, _ InstallationCredentials, _ ChatID, name, url string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tabs = append(f.tabs, name+"="+url)
+	return nil
 }
 
 func (f *fakeChats) AddChatMembers(_ context.Context, _ InstallationCredentials, p AddChatMembersParams) ([]string, error) {
