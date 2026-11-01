@@ -251,6 +251,13 @@ func (e *RegistrationError) Error() string {
 // still change it on the form), and it rides on the QR URL — not the
 // begin POST body, which has no name field. Empty omits the pre-fill.
 func (c *RegistrationClient) Begin(ctx context.Context, namePreset string, region Region) (*BeginResult, error) {
+	return c.BeginForApp(ctx, namePreset, region, "")
+}
+
+// BeginForApp is Begin for an agent that already owns a bot: a non-empty
+// appID makes Lark's confirmation page update that app (adding the scopes in
+// registrationAddons) instead of creating a second one.
+func (c *RegistrationClient) BeginForApp(ctx context.Context, namePreset string, region Region, appID string) (*BeginResult, error) {
 	// Pick the begin domain off the requested region. Empty / unknown
 	// regions degrade to Feishu (mainland) — same back-compat invariant
 	// as RegionOrDefault, so callers that pre-date this signature
@@ -294,7 +301,7 @@ func (c *RegistrationClient) Begin(ctx context.Context, namePreset string, regio
 	if resp.VerificationURIComplete == "" {
 		return nil, &RegistrationError{Code: "invalid_response", Description: "verification_uri_complete is empty"}
 	}
-	qr, err := decorateQRCodeURL(resp.VerificationURIComplete, c.cfg.Source, namePreset)
+	qr, err := decorateQRCodeURL(resp.VerificationURIComplete, c.cfg.Source, namePreset, appID)
 	if err != nil {
 		return nil, &RegistrationError{Code: "invalid_response", Description: "verification_uri_complete is not a URL: " + err.Error()}
 	}
@@ -473,7 +480,11 @@ func (c *RegistrationClient) doForm(ctx context.Context, domain string, form url
 // mirrors the upstream SDK's AppPreset.Name: Lark reads it from the
 // verification/QR URL (the begin POST body carries no name field) and
 // treats it as a user-editable default, not a locked final name.
-func decorateQRCodeURL(raw, source, namePreset string) (string, error) {
+//
+// Every QR also carries registrationAddons, and clientID when an existing
+// app is being updated, exactly as the upstream SDK's Options.Addons /
+// Options.AppID encode them.
+func decorateQRCodeURL(raw, source, namePreset, clientID string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", err
@@ -484,6 +495,14 @@ func decorateQRCodeURL(raw, source, namePreset string) (string, error) {
 	q.Set("source", "go-sdk/"+source)
 	if namePreset != "" {
 		q.Set("name", namePreset)
+	}
+	addons, err := encodeRegistrationAddons(registrationAddons)
+	if err != nil {
+		return "", err
+	}
+	q.Set("addons", addons)
+	if clientID != "" {
+		q.Set("clientID", clientID)
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil

@@ -168,6 +168,30 @@ type authQueriesAdapter interface {
 	GetAgentInWorkspace(ctx context.Context, params db.GetAgentInWorkspaceParams) (db.Agent, error)
 }
 
+// existingAppID is the app_id of the agent's active Feishu bot, so binding
+// again updates that app (granting newly required scopes) rather than
+// creating another. Empty when the agent has none or the lookup is not
+// available.
+func (s *RegistrationService) existingAppID(ctx context.Context, workspaceID, agentID pgtype.UUID) string {
+	q, ok := s.authQueries.(interface {
+		GetActiveChannelInstallationByAgent(context.Context, db.GetActiveChannelInstallationByAgentParams) (db.ChannelInstallation, error)
+	})
+	if !ok {
+		return ""
+	}
+	row, err := q.GetActiveChannelInstallationByAgent(ctx, db.GetActiveChannelInstallationByAgentParams{
+		WorkspaceID: workspaceID, AgentID: agentID, ChannelType: channelTypeFeishu,
+	})
+	if err != nil {
+		return ""
+	}
+	inst, err := installationFromRow(row)
+	if err != nil {
+		return ""
+	}
+	return inst.AppID
+}
+
 // NewRegistrationService wires the device-flow client, the APIClient
 // (for the post-success GetBotInfo lookup), and the DB write path. Any
 // required dependency missing surfaces as a constructor error so a
@@ -443,7 +467,7 @@ func (s *RegistrationService) BeginInstall(ctx context.Context, p BeginInstallPa
 	// field) keeps getting the historical mainland-first behaviour.
 	region := RegionOrDefault(string(p.Region))
 
-	begin, err := s.client.Begin(ctx, botNamePreset(agent.Name), region)
+	begin, err := s.client.BeginForApp(ctx, botNamePreset(agent.Name), region, s.existingAppID(ctx, p.WorkspaceID, p.AgentID))
 	if err != nil {
 		return BeginInstallResult{}, fmt.Errorf("lark registration: begin: %w", err)
 	}
