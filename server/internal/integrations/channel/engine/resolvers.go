@@ -35,6 +35,9 @@ const (
 	// refuses the same person at the same point; this is that verdict on the
 	// channel side.
 	OutcomeInvokeDenied Outcome = "invoke_denied"
+	// OutcomeIssueComment — a message in a chat bound to an issue was recorded
+	// as a comment on that issue instead of a Chat turn.
+	OutcomeIssueComment Outcome = "issue_comment"
 )
 
 // DropReason enumerates the drop-audit categories. Values match the legacy
@@ -49,6 +52,13 @@ const (
 	DropReasonRevokedInstallation DropReason = "revoked_installation"
 	DropReasonInvalidEvent        DropReason = "invalid_event"
 	DropReasonInvokeDenied        DropReason = "invocation_not_allowed"
+	// DropReasonIssueChatNotSteward — an issue-bound chat is ingested by its
+	// steward bot only; every other bot in the chat stands down so one
+	// message becomes at most one comment.
+	DropReasonIssueChatNotSteward DropReason = "issue_chat_not_steward"
+	// DropReasonIssueChatBotSender — bots in an issue-bound chat mirror the
+	// issue timeline; ingesting their messages would loop comments back.
+	DropReasonIssueChatBotSender DropReason = "issue_chat_bot_sender"
 )
 
 // Result is the typed verdict the Router produces for one inbound message,
@@ -448,10 +458,35 @@ type TypingNotifier interface {
 	OnSettled(ctx context.Context, sessionID pgtype.UUID, scope TypingSettlement)
 }
 
+// IssueChatRoute is the issue an inbound message in an issue-bound chat
+// belongs to, and the one installation allowed to ingest it.
+type IssueChatRoute struct {
+	BindingID             pgtype.UUID
+	WorkspaceID           pgtype.UUID
+	IssueID               pgtype.UUID
+	StewardInstallationID pgtype.UUID
+}
+
+// IssueChatRouter is the optional port that makes a group chat a second
+// surface of an issue's comment timeline (docs/lark-issue-group-sync.md).
+// A bound chat never reaches the Chat pipeline: its messages become comments
+// on the bound issue, written by RecordIssueComment, or are dropped.
+type IssueChatRouter interface {
+	// LookupIssueChat reports whether msg's chat (or topic) is bound to an
+	// issue. A lookup failure is an infrastructure error, never "unbound".
+	LookupIssueChat(ctx context.Context, msg channel.InboundMessage) (route IssueChatRoute, bound bool, err error)
+	// SentByBot reports whether msg was sent by an application rather than a
+	// person.
+	SentByBot(msg channel.InboundMessage) bool
+	// RecordIssueComment writes msg as a comment by identity on the routed
+	// issue. Idempotent on the platform message id.
+	RecordIssueComment(ctx context.Context, inst ResolvedInstallation, identity ResolvedIdentity, route IssueChatRoute, msg channel.InboundMessage) error
+}
+
 // ResolverSet is the per-platform bundle the Router runs the pipeline through.
-// Installation/Identity/Dedup/Session/Audit are required; Replier/Typing are
-// optional. OriginType is the issue.origin_type label written for /issue
-// commands from this channel (Feishu: "lark_chat").
+// Installation/Identity/Dedup/Session/Audit are required; Replier/Typing/
+// IssueChat are optional. OriginType is the issue.origin_type label written
+// for /issue commands from this channel (Feishu: "lark_chat").
 type ResolverSet struct {
 	Installation InstallationResolver
 	Identity     IdentityResolver
@@ -461,6 +496,7 @@ type ResolverSet struct {
 	Audit        Auditor
 	Replier      OutboundReplier
 	Typing       TypingNotifier
+	IssueChat    IssueChatRouter
 	OriginType   string
 }
 

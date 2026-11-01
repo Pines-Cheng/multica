@@ -348,6 +348,44 @@ func (r *Router) dispatch(ctx context.Context, set ResolverSet, msg channel.Inbo
 	return res, inst, err
 }
 
+// processIssueChat records one message of an issue-bound chat as a comment.
+// Only the steward installation ingests, which is what keeps a message seen
+// by several bots in the chat to a single comment. Unbound senders get the
+// binding prompt only when they addressed the bot; ordinary chatter from
+// them is dropped silently rather than answered with a card per message.
+func (r *Router) processIssueChat(ctx context.Context, set ResolverSet, msg channel.InboundMessage, inst ResolvedInstallation, route IssueChatRoute) (Result, dedupFinalize, error) {
+	if inst.ID != route.StewardInstallationID {
+		return r.drop(ctx, set, msg, inst.ID, DropReasonIssueChatNotSteward), finalizeMark, nil
+	}
+	if set.IssueChat.SentByBot(msg) {
+		return r.drop(ctx, set, msg, inst.ID, DropReasonIssueChatBotSender), finalizeMark, nil
+	}
+	identity, err := set.Identity.ResolveSender(ctx, inst, msg)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrSenderUnbound):
+			if !msg.AddressedToBot {
+				return r.drop(ctx, set, msg, inst.ID, DropReasonUnboundUser), finalizeMark, nil
+			}
+			_ = set.Audit.RecordDrop(ctx, inst.ID, msg, DropReasonUnboundUser)
+			return Result{
+				Outcome:        OutcomeNeedsBinding,
+				DropReason:     DropReasonUnboundUser,
+				InstallationID: inst.ID,
+				Sender:         msg.Source.SenderID,
+			}, finalizeMark, nil
+		case errors.Is(err, ErrSenderNotMember):
+			return r.drop(ctx, set, msg, inst.ID, DropReasonNonWorkspaceMember), finalizeMark, nil
+		default:
+			return Result{}, finalizeRelease, fmt.Errorf("resolve sender: %w", err)
+		}
+	}
+	if err := set.IssueChat.RecordIssueComment(ctx, inst, identity, route, msg); err != nil {
+		return Result{}, finalizeRelease, fmt.Errorf("record issue comment: %w", err)
+	}
+	return Result{Outcome: OutcomeIssueComment, InstallationID: inst.ID, IssueID: route.IssueID}, finalizeMark, nil
+}
+
 // dedupFinalize tells dispatch how to land the claim row after processClaimed.
 type dedupFinalize int
 
@@ -360,6 +398,19 @@ const (
 // processClaimed runs the post-dedup pipeline. Mirrors
 // lark.Dispatcher.processClaimed; see its boundary contract per step.
 func (r *Router) processClaimed(ctx context.Context, set ResolverSet, msg channel.InboundMessage, inst ResolvedInstallation, claimToken pgtype.UUID, bareFresh, startChat bool) (Result, dedupFinalize, error) {
+	// 2b. A group chat bound to an issue is that issue's timeline, not a
+	//     Chat: every message from a person (addressed or not) becomes a
+	//     comment, so it must branch off before the @bot filter.
+	if set.IssueChat != nil && msg.Source.ChatType == channel.ChatTypeGroup {
+		route, bound, err := set.IssueChat.LookupIssueChat(ctx, msg)
+		if err != nil {
+			return Result{}, finalizeRelease, fmt.Errorf("lookup issue chat: %w", err)
+		}
+		if bound {
+			return r.processIssueChat(ctx, set, msg, inst, route)
+		}
+	}
+
 	// 3. Group-mention filter (group chats only), before identity so an
 	//    unbound user's idle group chatter never spams a binding card.
 	if msg.Source.ChatType == channel.ChatTypeGroup && !msg.AddressedToBot {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // This file is the Feishu ResolverSet: the platform-specific implementations
@@ -96,15 +97,28 @@ func (r *feishuInstallationResolver) ResolveInstallation(ctx context.Context, ms
 type feishuIdentityResolver struct{ store *ChannelStore }
 
 func (r *feishuIdentityResolver) ResolveSender(ctx context.Context, inst engine.ResolvedInstallation, msg channel.InboundMessage) (engine.ResolvedIdentity, error) {
+	unionID := msg.Source.SenderStableID
 	binding, err := r.store.GetLarkUserBindingByOpenID(ctx, GetUserBindingByOpenIDParams{
 		InstallationID: inst.ID,
 		ChannelUserID:  msg.Source.SenderID,
 	})
+	reused := false
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return engine.ResolvedIdentity{}, err
+		}
+		// Not linked to THIS bot. union_id is stable across the apps of one
+		// developer, so a link the member made on another bot of this
+		// workspace identifies them here too — one binding per person, not
+		// per bot.
+		cand, ok, ferr := r.bindingByUnionID(ctx, inst.WorkspaceID, unionID)
+		if ferr != nil {
+			return engine.ResolvedIdentity{}, ferr
+		}
+		if !ok {
 			return engine.ResolvedIdentity{}, engine.ErrSenderUnbound
 		}
-		return engine.ResolvedIdentity{}, err
+		binding, reused = cand, true
 	}
 	isMember, err := r.store.IsWorkspaceMember(ctx, inst.WorkspaceID, binding.MulticaUserID)
 	if err != nil {
@@ -113,7 +127,44 @@ func (r *feishuIdentityResolver) ResolveSender(ctx context.Context, inst engine.
 	if !isMember {
 		return engine.ResolvedIdentity{}, engine.ErrSenderNotMember
 	}
+	// Materialize the reused link for this bot, or record the union_id an
+	// older binding was created without, so later lookups (and other bots)
+	// can match on it. Idempotent upsert; the config merge never erases.
+	if reused || (unionID != "" && binding.UnionID.String != unionID) {
+		_, cerr := r.store.CreateLarkUserBinding(ctx, CreateUserBindingParams{
+			WorkspaceID:    inst.WorkspaceID,
+			MulticaUserID:  binding.MulticaUserID,
+			InstallationID: inst.ID,
+			ChannelUserID:  msg.Source.SenderID,
+			UnionID:        textOrNull(unionID),
+		})
+		if cerr != nil && reused {
+			return engine.ResolvedIdentity{}, fmt.Errorf("materialize reused feishu binding: %w", cerr)
+		}
+	}
 	return engine.ResolvedIdentity{UserID: binding.MulticaUserID}, nil
+}
+
+func (r *feishuIdentityResolver) bindingByUnionID(ctx context.Context, workspaceID pgtype.UUID, unionID string) (UserBinding, bool, error) {
+	if unionID == "" {
+		return UserBinding{}, false, nil
+	}
+	row, err := r.store.FindChannelUserBindingByUnionID(ctx, db.FindChannelUserBindingByUnionIDParams{
+		WorkspaceID: workspaceID,
+		ChannelType: channelTypeFeishu,
+		UnionID:     unionID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return UserBinding{}, false, nil
+		}
+		return UserBinding{}, false, err
+	}
+	b, err := userBindingFromRow(row)
+	if err != nil {
+		return UserBinding{}, false, err
+	}
+	return b, true, nil
 }
 
 // ---- dedup ----

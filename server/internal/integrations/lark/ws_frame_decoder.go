@@ -104,7 +104,14 @@ func (d *LarkJSONFrameDecoder) Decode(payload []byte, inst Installation) (Inboun
 		// thread_id is present only when the message lives inside a Lark
 		// topic (话题). The outbound patcher uses it to decide whether to
 		// reply back into that thread; empty means a normal chat message.
-		ThreadID: evt.Message.ThreadID,
+		ThreadID:      evt.Message.ThreadID,
+		SenderType:    evt.Sender.SenderType,
+		SenderUnionID: evt.Sender.SenderID.UnionID,
+	}
+	for _, m := range evt.Message.Mentions {
+		msg.Mentions = append(msg.Mentions, InboundMention{
+			Key: m.Key, Name: m.Name, OpenID: m.ID.OpenID, UnionID: m.ID.UnionID,
+		})
 	}
 
 	botUnionID := ""

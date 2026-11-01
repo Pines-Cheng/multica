@@ -689,9 +689,25 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					Logger:      slog.Default(),
 				})
 				mediaResolver := lark.NewFeishuMediaResolver(larkClient, installSvc, store, engine.NewDBMediaIntentLedger(queries), slog.Default())
-				channelRouter.Register(channel.TypeFeishu, lark.NewFeishuResolverSet(
+				feishuSet := lark.NewFeishuResolverSet(
 					cs, feishuSession, auditLogger, resolverReplier, typingIndicator, mediaResolver,
-				))
+				)
+				// Issue-bound group chats (docs/lark-issue-group-sync.md): their
+				// messages become issue comments, and issue comments are
+				// mirrored back into the chat.
+				feishuSet.IssueChat = lark.NewFeishuIssueChatRouter(cs, h, slog.Default())
+				channelRouter.Register(channel.TypeFeishu, feishuSet)
+				chatAdmin, _ := larkClient.(lark.ChatAdmin)
+				issueChat := lark.NewIssueChatService(lark.IssueChatServiceConfig{
+					Store:       cs,
+					Credentials: installSvc,
+					API:         larkClient,
+					Chats:       chatAdmin,
+					AppURL:      appURLFromEnv(),
+					Logger:      slog.Default(),
+				})
+				issueChat.Register(bus)
+				h.LarkIssueChat = issueChat
 				slog.Info("lark inbound pipeline wired", "connector", connectorLabel)
 
 				// One-shot union_id backfill for installations created
@@ -2071,6 +2087,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/wakeups/{wakeupID}/runs", h.ListIssueWakeupRuns)
 					r.Get("/system-wakeups", h.ListIssueSystemWakeups)
 					r.Put("/system-wakeups/{rule}", h.UpdateIssueSystemWakeup)
+					r.Get("/channel-chat", h.GetIssueChannelChat)
+					r.With(handler.RequireHumanActor).Post("/channel-chat", h.CreateIssueChannelChat)
 					r.Get("/active-task", h.GetActiveTaskForIssue)
 					r.Post("/tasks/{taskId}/cancel", h.CancelTask)
 					r.With(handler.RequireHumanActor).Post("/tasks/{taskId}/supplements", h.CreateTaskSupplement)

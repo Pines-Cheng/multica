@@ -20,7 +20,13 @@ type referenceLinkQueries interface {
 // linkReplyReferences formats the outbound copy using workspace metadata.
 // Target existence is handled by the destination pages.
 func (p *Patcher) linkReplyReferences(ctx context.Context, workspaceID pgtype.UUID, content string) string {
-	appURL, err := url.Parse(p.cfg.AppURL)
+	return linkWorkspaceReferences(ctx, p.queries, p.cfg.AppURL, workspaceID, content)
+}
+
+// linkWorkspaceReferences rewrites Multica mention links and bare issue
+// identifiers into web links under the workspace, for any outbound copy.
+func linkWorkspaceReferences(ctx context.Context, queries referenceLinkQueries, rawAppURL string, workspaceID pgtype.UUID, content string) string {
+	appURL, err := url.Parse(rawAppURL)
 	if err != nil || (appURL.Scheme != "http" && appURL.Scheme != "https") || appURL.Host == "" || !workspaceID.Valid {
 		return content
 	}
@@ -49,11 +55,11 @@ func (p *Patcher) linkReplyReferences(ctx context.Context, workspaceID pgtype.UU
 		}
 		if !loaded {
 			loaded = true
-			ws, workspaceErr = p.queries.GetWorkspace(ctx, workspaceID)
+			ws, workspaceErr = queries.GetWorkspace(ctx, workspaceID)
 		}
 		if workspaceErr != nil || ws.ID != workspaceID || ws.Slug == "" || (prefix != "" && prefix != ws.IssuePrefix) {
 			return ""
 		}
-		return channel.ReferenceWebLink(p.cfg.AppURL, ws.Slug, kind, reference)
+		return channel.ReferenceWebLink(rawAppURL, ws.Slug, kind, reference)
 	})
 }

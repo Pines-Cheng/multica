@@ -333,6 +333,10 @@ type Handler struct {
 	ChannelMediaReconciler *service.ChannelMediaReconciler
 	// LarkTyping owns the durable reaction cleanup worker, started under sweepCtx.
 	LarkTyping *lark.TypingIndicatorManager
+	// LarkIssueChat binds issues to Feishu group chats and mirrors their
+	// comment timeline (docs/lark-issue-group-sync.md). Nil when Lark is
+	// not configured.
+	LarkIssueChat *lark.IssueChatService
 	// SlackInstall owns the bring-your-own-app Slack install lifecycle (register
 	// pasted tokens / list / revoke) and the at-rest encryption of each app's bot
 	// + app tokens (MUL-3666). Nil unless MULTICA_SLACK_SECRET_KEY is set.

@@ -142,11 +142,12 @@ func channelMessageFromLark(lm InboundMessage) channel.InboundMessage {
 		AddressedToBot:     lm.AddressedToBot,
 		ForceFresh:         lm.ForceFreshSession,
 		Source: channel.Source{
-			ChannelType: channel.TypeFeishu,
-			ChatID:      string(lm.ChatID),
-			ChatType:    channel.ChatType(string(lm.ChatType)),
-			SenderID:    string(lm.SenderOpenID),
-			ThreadID:    lm.ThreadID,
+			ChannelType:    channel.TypeFeishu,
+			ChatID:         string(lm.ChatID),
+			ChatType:       channel.ChatType(string(lm.ChatType)),
+			SenderID:       string(lm.SenderOpenID),
+			SenderStableID: lm.SenderUnionID,
+			ThreadID:       lm.ThreadID,
 		},
 		Raw: raw,
 	}

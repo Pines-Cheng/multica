@@ -63,6 +63,26 @@ type InboundMessage struct {
 	// HasSelectedContext is set when enrichment renders an explicitly selected
 	// quote or forward; automatic recent context does not set it.
 	HasSelectedContext bool
+
+	// SenderType is Lark's sender.sender_type ("user" / "app"). Issue-bound
+	// chats drop app-sent messages so a bot's mirrored comment never loops
+	// back into the issue.
+	SenderType string
+	// SenderUnionID is the sender's cross-app stable identity. It lets one
+	// account binding serve every bot of the workspace.
+	SenderUnionID string
+	// Mentions are the raw @-mentions. Issue-bound chats render them into
+	// Multica mention links, matching bots and members by union_id.
+	Mentions []InboundMention
+}
+
+// InboundMention is one entry of the receive event's mentions[]. Key is the
+// placeholder ("@_user_1") the text and post contents carry.
+type InboundMention struct {
+	Key     string `json:"key"`
+	Name    string `json:"name"`
+	OpenID  string `json:"open_id,omitempty"`
+	UnionID string `json:"union_id,omitempty"`
 }
 
 // Outcome categorizes what the inbound pipeline decided. The OutcomeReplier
