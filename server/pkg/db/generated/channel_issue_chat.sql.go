@@ -235,6 +235,33 @@ func (q *Queries) GetChannelIssueChatByRoute(ctx context.Context, arg GetChannel
 	return i, err
 }
 
+const getChannelIssueIntroMessage = `-- name: GetChannelIssueIntroMessage :one
+SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at, task_id FROM channel_issue_message
+WHERE binding_id = $1 AND kind = 'intro'
+ORDER BY created_at ASC
+LIMIT 1
+`
+
+// The chat's opening card, kept up to date as the pinned progress card.
+func (q *Queries) GetChannelIssueIntroMessage(ctx context.Context, bindingID pgtype.UUID) (ChannelIssueMessage, error) {
+	row := q.db.QueryRow(ctx, getChannelIssueIntroMessage, bindingID)
+	var i ChannelIssueMessage
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.IssueID,
+		&i.BindingID,
+		&i.InstallationID,
+		&i.ChannelMessageID,
+		&i.Direction,
+		&i.Kind,
+		&i.CommentID,
+		&i.CreatedAt,
+		&i.TaskID,
+	)
+	return i, err
+}
+
 const getChannelIssueMessageByChannelID = `-- name: GetChannelIssueMessageByChannelID :one
 SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at, task_id FROM channel_issue_message
 WHERE channel_message_id = $1

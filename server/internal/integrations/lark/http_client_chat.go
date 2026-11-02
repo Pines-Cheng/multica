@@ -17,6 +17,8 @@ type ChatAdmin interface {
 	AddChatMembers(ctx context.Context, creds InstallationCredentials, p AddChatMembersParams) (invalid []string, err error)
 	// AddChatURLTab pins a URL as a tab at the top of the chat.
 	AddChatURLTab(ctx context.Context, creds InstallationCredentials, chatID ChatID, name, url string) error
+	// PinTopNotice pins a message to the top of the chat.
+	PinTopNotice(ctx context.Context, creds InstallationCredentials, chatID ChatID, messageID string) error
 }
 
 // Lark id types accepted by the chat endpoints.
@@ -158,6 +160,27 @@ func (c *httpAPIClient) AddChatURLTab(ctx context.Context, creds InstallationCre
 			c.invalidateToken(creds.AppID)
 		}
 		return &APIError{Op: "add chat tab", Code: resp.Code, Msg: resp.Msg}
+	}
+	return nil
+}
+
+// PinTopNotice calls POST /open-apis/im/v1/chats/{chat_id}/top_notice/put_top_notice
+// with action_type 1 (a message).
+func (c *httpAPIClient) PinTopNotice(ctx context.Context, creds InstallationCredentials, chatID ChatID, messageID string) error {
+	body := map[string]any{"chat_top_notice": []map[string]string{{"action_type": "1", "message_id": messageID}}}
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	path := "/open-apis/im/v1/chats/" + url.PathEscape(string(chatID)) + "/top_notice/put_top_notice"
+	if err := c.doAuthedJSON(ctx, creds, http.MethodPost, path, body, &resp); err != nil {
+		return fmt.Errorf("lark http client: pin top notice: %w", err)
+	}
+	if resp.Code != 0 {
+		if isTokenError(resp.Code) {
+			c.invalidateToken(creds.AppID)
+		}
+		return &APIError{Op: "pin top notice", Code: resp.Code, Msg: resp.Msg}
 	}
 	return nil
 }

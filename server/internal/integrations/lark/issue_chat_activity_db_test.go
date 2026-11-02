@@ -22,6 +22,7 @@ type fakeChats struct {
 	created []CreateChatParams
 	added   []AddChatMembersParams
 	tabs    []string
+	pinned  []string
 }
 
 func (f *fakeChats) CreateChat(_ context.Context, _ InstallationCredentials, p CreateChatParams) (ChatID, error) {
@@ -35,6 +36,13 @@ func (f *fakeChats) AddChatURLTab(_ context.Context, _ InstallationCredentials, 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.tabs = append(f.tabs, name+"="+url)
+	return nil
+}
+
+func (f *fakeChats) PinTopNotice(_ context.Context, _ InstallationCredentials, _ ChatID, messageID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pinned = append(f.pinned, messageID)
 	return nil
 }
 
@@ -180,17 +188,53 @@ func TestIssueChatP1_SubIssueBecomesTopicAndThreadsItsTimeline(t *testing.T) {
 		t.Fatal("a sub-issue must not open a chat of its own")
 	}
 
+	// A status change shows on the root chat's pinned progress card instead
+	// of posting a notice.
 	sentBefore := len(f.api.sent)
-	f.publishIssue(protocol.EventIssueUpdated, child, map[string]any{"status_changed": true, "prev_status": "todo"})
 	f.fx.Exec(t, `UPDATE issue SET status = 'in_progress' WHERE id = $1`, child)
 	f.publishIssue(protocol.EventIssueUpdated, child, map[string]any{"status_changed": true, "prev_status": "todo"})
-	last := f.api.sent[len(f.api.sent)-1]
-	if len(f.api.sent) <= sentBefore || !strings.Contains(last.CardJSON, "进行中") {
-		t.Fatalf("no status notice: %+v", f.api.sent[sentBefore:])
+	if len(f.api.sent) != sentBefore {
+		t.Fatalf("a status change posted a notice: %+v", f.api.sent[sentBefore:])
 	}
-	if last.ReplyTarget != (ReplyTarget{MessageID: topic.ThreadRootMessageID, InThread: true}) {
-		t.Fatalf("notice not threaded into the topic: %+v", last.ReplyTarget)
+	progress := f.progressCard(t, parent)
+	if !strings.Contains(progress, "进行中 · Child · Leader") || !strings.Contains(progress, "Leader 处理中「Child」") {
+		t.Fatalf("progress card does not show the sub-issue's state: %s", progress)
 	}
+
+	f.fx.Exec(t, `UPDATE issue SET metadata = '{"Meego":"https://meego.example/story/1","note":"plain"}' WHERE id = $1`, parent)
+	f.bus.Publish(events.Event{Type: protocol.EventIssueMetadataChanged, WorkspaceID: f.ws, Payload: map[string]any{"issue_id": parent}})
+	progress = f.progressCard(t, parent)
+	if !strings.Contains(progress, "[Meego](https://meego.example/story/1)") || strings.Contains(progress, "plain") {
+		t.Fatalf("progress card links = %s", progress)
+	}
+}
+
+// progressCard returns the latest render of a root chat's progress card and
+// checks it is pinned.
+func (f *activityFixture) progressCard(t *testing.T, rootIssue string) string {
+	t.Helper()
+	binding, ok := f.binding(t, rootIssue)
+	if !ok {
+		t.Fatal("root chat missing")
+	}
+	intro, err := f.store.GetChannelIssueIntroMessage(context.Background(), binding.ID)
+	if err != nil {
+		t.Fatalf("intro card: %v", err)
+	}
+	pinned := false
+	for _, id := range f.chats.pinned {
+		pinned = pinned || id == intro.ChannelMessageID
+	}
+	if !pinned {
+		t.Fatalf("progress card %s not pinned (pinned %v)", intro.ChannelMessageID, f.chats.pinned)
+	}
+	for i := len(f.api.patched) - 1; i >= 0; i-- {
+		if f.api.patched[i].LarkCardMessageID == intro.ChannelMessageID {
+			return unescapeCardJSON(t, f.api.patched[i].CardJSON)
+		}
+	}
+	t.Fatal("progress card was never refreshed")
+	return ""
 }
 
 func TestIssueChatP1_ReassignmentHandsTheChatToTheNewSteward(t *testing.T) {
@@ -216,9 +260,8 @@ func TestIssueChatP1_ReassignmentHandsTheChatToTheNewSteward(t *testing.T) {
 	if !invited {
 		t.Fatalf("the new steward's bot was not invited: %+v", f.chats.added)
 	}
-	last := f.api.sent[len(f.api.sent)-1]
-	if last.InstallationID.AppID != "cli_p1_other" || !strings.Contains(last.CardJSON, "Other") {
-		t.Fatalf("assignee notice = %+v", last)
+	if progress := f.progressCard(t, issue); !strings.Contains(progress, "负责人：Other") {
+		t.Fatalf("progress card does not show the new assignee: %s", progress)
 	}
 }
 

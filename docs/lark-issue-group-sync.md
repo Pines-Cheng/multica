@@ -162,17 +162,17 @@ if bound:
 
 | 事件 | 群内表现 | 发送者 |
 |---|---|---|
-| `comment:created`（Agent 写） | 卡片：正文 Markdown | 该 Agent 自己的 Bot（在群里时）；否则由管家代发，卡头写 Agent 名 |
+| `comment:created`（Agent 写） | 卡片：正文 Markdown。由某次运行写出、且该运行已有运行卡片时，**直接把运行卡片改成这条评论**，不再另发一张；Agent @ 了成员时卡头为橙色「待 xx 处理」 | 该 Agent 自己的 Bot（在群里时）；否则由管家代发，卡头写 Agent 名 |
 | `comment:created`（人在 Web 写） | 卡片：卡头 `张三 · 来自 Multica`，正文 | 管家 |
 | `comment:created`（来自飞书） | **不发**（payload 带 `channel_origin`） | — |
 | `comment:updated` | 更新原卡片 | 原发送者 |
 | `comment:deleted` | 原卡片改为"该评论已删除" | 原发送者 |
-| `issue:updated` 状态/指派变更（P1） | 一行系统卡片：`状态：进行中 → 已完成` | 管家 |
+| `issue:created` / `issue:updated` / `issue_metadata:changed` | 不发新消息，原地刷新根群置顶的**进度卡**（群里的第一张卡片）：状态、负责人、当前在等谁、子任务列表（状态 · 阶段 · 负责人）、issue metadata 里的链接（Meego、需求文档、MR、PPE 验证等）、查看任务详情 | 管家（发出进度卡的 Bot） |
 | `issue:created` 子 issue（P1） | 按 §6 开话题 | 管家 |
-| `task:*` Agent 运行进度（P2） | 运行超过 20 秒才发卡片（Leader 分派这类短运行不打扰）；无标题，显示状态、已运行时长和最近 2 条动作（只显示动作类别，如「运行命令」「修改文件」，不暴露参数），最多每 3 秒刷新；结束时定稿为用时 + 结果评论摘要或失败原因；附「查看详情」链接 | 该 Agent 的 Bot |
+| `task:*` Agent 运行进度（P2） | 运行超过 20 秒才发卡片（Leader 分派这类短运行不打扰）；无标题，显示状态、已运行时长和最近 2 条动作（只显示动作类别，如「运行命令」「修改文件」，不暴露参数），最多每 3 秒刷新；运行写了评论时卡片被评论接管（见上）；没写评论则结束时只留一行「已完成 · 用时」，失败时显示原因；已写过评论的运行不再开卡片；附「查看详情」链接 | 该 Agent 的 Bot |
 
 - **路由**：comment 所属 issue 有绑定 → 发到群主消息流，或用 `reply_in_thread` 回复到话题根。Web 上对某条 comment 的回复 → 引用回复它对应的那条飞书消息。
-- **mention 渲染**：mention 了已绑定飞书的成员时，用发送 Bot 视角下的身份生成原生 `<at>`（用户在该 Bot 下没有 open_id 时退化为粗体名字）；mention Agent 一律渲染为粗体名字，不用 `<at>` 去 @Bot，避免对方 Bot 收到事件。
+- **mention 渲染**：mention 了已绑定飞书的成员时，用发送 Bot 视角下的身份（该 Bot 下的绑定 open_id）生成原生 `<at id=…>`，成员会收到飞书提醒；用户在该 Bot 下没有绑定时退化为粗体名字；mention Agent 一律渲染为粗体名字，不用 `<at>` 去 @Bot，避免对方 Bot 收到事件。
 - **防回环三道闸**：① `channel_origin` 跳过回发；② 入站丢弃 `sender_type=app`；③ `channel_issue_message.channel_message_id` 唯一。
 - **投递语义（P0）**：尽力而为。失败时重试 3 次（指数退避），仍失败则记日志和指标，不阻塞 issue 写入。是否需要持久化 outbox 见 §13 D2。
 
@@ -184,7 +184,7 @@ if bound:
 
 ## 10. 权限升级
 
-- 新安装：注册客户端 `decorateQRCodeURL` 增加 `addons`，内容为 `{"scopes":{"tenant":["im:message.group_msg","im:chat.members:write_only"]}}`。
+- 新安装：注册客户端 `decorateQRCodeURL` 增加 `addons`，内容为 `{"scopes":{"tenant":["im:message.group_msg","im:chat.members:write_only","im:chat.tabs:write_only","im:chat.top_notice:write_only"]}}`（后两项用于群顶部的「任务详情」标签页和置顶进度卡）。
 - 已有安装：Agent 的飞书集成设置页新增"升级飞书权限"入口，生成带 `clientID=<app_id>` 和同样 `addons` 的二维码，由安装者扫码确认。
 - 开启 issue 群前检查管家 Bot 是否具备 `im:message.group_msg`（通过 `application:application:self_manage` 自查授权列表）。未具备时仍允许开启，并在介绍卡片和 Web 上提示"仅同步 @Bot 的消息"。
 

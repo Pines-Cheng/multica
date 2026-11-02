@@ -32,8 +32,6 @@ const (
 	issueMessageKindIntro   = "intro"
 	// issueMessageKindThreadRoot is the card a sub-issue topic hangs under.
 	issueMessageKindThreadRoot = "thread_root"
-	// issueMessageKindActivity is a status / assignee change notice.
-	issueMessageKindActivity = "activity"
 )
 
 // CommentChannelOriginKey is the comment:created payload key that marks a

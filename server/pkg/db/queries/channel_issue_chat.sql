@@ -71,6 +71,13 @@ WHERE task_id = sqlc.arg('task_id') AND kind = 'task'
 ORDER BY created_at ASC
 LIMIT 1;
 
+-- name: GetChannelIssueIntroMessage :one
+-- The chat's opening card, kept up to date as the pinned progress card.
+SELECT * FROM channel_issue_message
+WHERE binding_id = sqlc.arg('binding_id') AND kind = 'intro'
+ORDER BY created_at ASC
+LIMIT 1;
+
 -- name: ConvertChannelIssueRunCardToComment :execrows
 -- A run's live card becomes the card of the comment the run wrote, so the
 -- chat shows one message per run instead of a run card and a comment card.

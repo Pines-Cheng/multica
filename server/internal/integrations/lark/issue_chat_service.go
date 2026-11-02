@@ -229,7 +229,7 @@ func (s *IssueChatService) EnsureChat(ctx context.Context, p EnsureIssueChatPara
 			s.cfg.Logger.Warn("lark issue chat: add task tab failed", "chat_id", string(chatID), "error", err)
 		}
 	}
-	s.sendIntro(ctx, creds, row, issue, identifier, issueLink, plan)
+	s.sendIntro(ctx, creds, row, issue, plan)
 	return s.chatView(ctx, row), nil
 }
 
@@ -591,21 +591,14 @@ func uniqueUUIDs(ids []pgtype.UUID) []pgtype.UUID {
 	return out
 }
 
-func (s *IssueChatService) sendIntro(ctx context.Context, creds InstallationCredentials, row db.ChannelIssueChat, issue db.Issue, identifier, issueLink string, plan chatPlan) {
-	var b strings.Builder
-	fmt.Fprintf(&b, "**%s %s**\n", identifier, issue.Title)
-	fmt.Fprintf(&b, "状态：%s", statusLabel(issue.Status))
-	if plan.assignee != "" {
-		fmt.Fprintf(&b, " · 负责人：%s", plan.assignee)
-	}
-	if issueLink != "" {
-		fmt.Fprintf(&b, "\n[查看任务详情](%s)", issueLink)
-	}
-	b.WriteString("\n\n群里的发言会同步为该任务的评论，任务的评论也会同步到群里。@ 某个 Agent 即可让它开始处理。")
+// sendIntro posts the chat's opening card, which then serves as its progress
+// card, and pins it to the top of the chat.
+func (s *IssueChatService) sendIntro(ctx context.Context, creds InstallationCredentials, row db.ChannelIssueChat, issue db.Issue, plan chatPlan) {
+	body := s.progressMarkdown(ctx, issue) + "\n\n" + progressHint
 	if len(plan.uninvited) > 0 {
-		fmt.Fprintf(&b, "\n\n以下成员尚未绑定飞书，未能拉入群：%s", strings.Join(plan.uninvited, "、"))
+		body += "\n\n以下成员尚未绑定飞书，未能拉入群：" + strings.Join(plan.uninvited, "、")
 	}
-	card, err := issueChatCardJSON("", "", b.String())
+	card, err := issueChatCardJSON("", "", body)
 	if err == nil {
 		var msgID string
 		msgID, err = s.cfg.API.SendInteractiveCard(ctx, SendCardParams{InstallationID: creds, ChatID: ChatID(row.ChatID), CardJSON: card})
@@ -615,6 +608,9 @@ func (s *IssueChatService) sendIntro(ctx context.Context, creds InstallationCred
 				InstallationID: row.StewardInstallationID, ChannelMessageID: msgID,
 				Direction: issueMessageOutbound, Kind: issueMessageKindIntro,
 			})
+			if perr := s.cfg.Chats.PinTopNotice(ctx, creds, ChatID(row.ChatID), msgID); perr != nil {
+				s.cfg.Logger.Warn("lark issue chat: pin progress card failed", "chat_id", row.ChatID, "error", perr)
+			}
 		}
 	}
 	if err != nil {
@@ -632,6 +628,7 @@ func (s *IssueChatService) Register(bus *events.Bus) {
 	bus.Subscribe(protocol.EventCommentCreated, s.handleSquadMention)
 	bus.Subscribe(protocol.EventIssueCreated, s.handleIssueEvent)
 	bus.Subscribe(protocol.EventIssueUpdated, s.handleIssueEvent)
+	bus.Subscribe(protocol.EventIssueMetadataChanged, s.handleMetadataEvent)
 	s.registerRuns(bus)
 }
 

@@ -1,15 +1,13 @@
 package lark
 
 // Issue events for issue-bound Feishu chats (docs/lark-issue-group-sync.md,
-// P1): status / assignee notices, automatic chats for squad issues and
-// sub-issue topics, adding new participants, and steward handover.
+// P1): automatic chats for squad issues and sub-issue topics, adding new
+// participants, steward handover, and progress card refreshes.
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -45,7 +43,6 @@ type issueChange struct {
 	created         bool
 	statusChanged   bool
 	assigneeChanged bool
-	prevStatus      string
 	actorMember     pgtype.UUID
 	issueID         pgtype.UUID
 }
@@ -69,7 +66,6 @@ func issueChangeFromEvent(e events.Event) (issueChange, bool) {
 	c := issueChange{created: e.Type == protocol.EventIssueCreated, issueID: id}
 	c.statusChanged, _ = payload["status_changed"].(bool)
 	c.assigneeChanged, _ = payload["assignee_changed"].(bool)
-	c.prevStatus, _ = payload["prev_status"].(string)
 	if e.ActorType == "member" {
 		if actor, err := util.ParseUUID(e.ActorID); err == nil {
 			c.actorMember = actor
@@ -89,6 +85,9 @@ func (s *IssueChatService) handleIssueEvent(e events.Event) {
 		defer cancel()
 		if err := s.syncIssueChange(ctx, change); err != nil {
 			s.cfg.Logger.Warn("lark issue chat: issue sync failed", "issue_id", uuidString(change.issueID), "error", err)
+		}
+		if err := s.refreshProgress(ctx, change.issueID); err != nil {
+			s.cfg.Logger.Warn("lark issue chat: progress card refresh failed", "issue_id", uuidString(change.issueID), "error", err)
 		}
 	})
 }
@@ -115,6 +114,8 @@ func (s *IssueChatService) syncIssueChange(ctx context.Context, change issueChan
 	if err != nil || !ok {
 		return err
 	}
+	// Status and assignee changes show on the pinned progress card, which
+	// handleIssueEvent refreshes after this; they post no notice of their own.
 	if change.assigneeChanged {
 		steward = s.handover(ctx, &binding, steward, issue)
 		if creds, err := installationCredentialsFor(steward, s.cfg.Credentials); err == nil {
@@ -122,38 +123,7 @@ func (s *IssueChatService) syncIssueChange(ctx context.Context, change issueChan
 			s.inviteParticipants(ctx, steward, creds, ChatID(binding.ChatID), agents, users)
 		}
 	}
-	var lines []string
-	if change.statusChanged && change.prevStatus != issue.Status {
-		lines = append(lines, fmt.Sprintf("**状态**：%s → %s", statusLabel(change.prevStatus), statusLabel(issue.Status)))
-	}
-	if change.assigneeChanged {
-		name := s.assigneeName(ctx, issue)
-		if name == "" {
-			name = "未指派"
-		}
-		lines = append(lines, "**负责人**："+name)
-	}
-	if len(lines) == 0 {
-		return nil
-	}
-	return s.postActivity(ctx, binding, steward, strings.Join(lines, "\n"))
-}
-
-// postActivity posts a timeline notice, threaded into a sub-issue's topic.
-func (s *IssueChatService) postActivity(ctx context.Context, binding db.ChannelIssueChat, steward Installation, markdown string) error {
-	var target ReplyTarget
-	if binding.ThreadRootMessageID != "" {
-		target = ReplyTarget{MessageID: binding.ThreadRootMessageID, InThread: true}
-	}
-	msgID, err := s.sendCard(ctx, steward, binding, "", markdown, target)
-	if err != nil {
-		return err
-	}
-	return s.cfg.Store.RecordChannelIssueMessage(ctx, db.RecordChannelIssueMessageParams{
-		WorkspaceID: binding.WorkspaceID, IssueID: binding.IssueID, BindingID: binding.ID,
-		InstallationID: steward.ID, ChannelMessageID: msgID,
-		Direction: issueMessageOutbound, Kind: issueMessageKindActivity,
-	})
+	return nil
 }
 
 // autoCreate opens a chat without anyone clicking: always as a topic when an
