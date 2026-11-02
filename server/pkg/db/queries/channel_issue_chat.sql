@@ -124,14 +124,6 @@ WHERE workspace_id = sqlc.arg('workspace_id')
 ORDER BY created_at DESC
 LIMIT 1;
 
--- name: GetLatestCommentForIssue :one
--- The issue's newest comment, read by the progress card to tell whether the
--- work is waiting on a person an agent asked.
-SELECT * FROM comment
-WHERE issue_id = sqlc.arg('issue_id') AND deleted_at IS NULL
-ORDER BY created_at DESC
-LIMIT 1;
-
 -- name: GetLatestCommentBySourceTask :one
 -- The last comment a run wrote, summarised on its finished run card.
 SELECT * FROM comment

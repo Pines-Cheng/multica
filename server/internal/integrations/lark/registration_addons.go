@@ -12,15 +12,12 @@ import (
 // base template, which already grants chat creation. Issue-bound chats need
 // the steward bot to read every person's message in the group (not only
 // @-mentions), to add members after creation, and to pin the issue as a
-// chat tab and its progress card to the top of the chat, to show the work's status in
-// the chat name, and to pin the chat for the members the work waits on.
+// chat tab and its progress card to the top of the chat.
 var registrationAddons = []string{
 	"im:message.group_msg",
 	"im:chat.members:write_only",
 	"im:chat.tabs:write_only",
 	"im:chat.top_notice:write_only",
-	"im:chat:update",
-	"im:datasync.feed_card.time_sensitive:write",
 }
 
 // encodeRegistrationAddons encodes tenant scopes the way the upstream SDK

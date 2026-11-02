@@ -62,10 +62,6 @@ type IssueChatService struct {
 	cfg   IssueChatServiceConfig
 	locks sync.Map
 	runs  runCards
-	// chatNames and pinnedUsers remember, per binding, the name and the
-	// time-sensitive pins last applied, so unchanged state is not resent.
-	chatNames   sync.Map
-	pinnedUsers sync.Map
 }
 
 func NewIssueChatService(cfg IssueChatServiceConfig) *IssueChatService {
@@ -194,9 +190,8 @@ func (s *IssueChatService) EnsureChat(ctx context.Context, p EnsureIssueChatPara
 	if len(createBots) > maxBotsPerChatRequest {
 		createBots = createBots[:maxBotsPerChatRequest]
 	}
-	chatName := s.statusChatName(ctx, issue, s.progressState(ctx, issue).tag)
 	chatID, err := s.cfg.Chats.CreateChat(ctx, creds, CreateChatParams{
-		Name:        chatName,
+		Name:        issueChatName(identifier, issue.Title),
 		Description: issueLink,
 		UserIDType:  plan.createIDType,
 		UserIDs:     plan.createUsers,
@@ -229,7 +224,6 @@ func (s *IssueChatService) EnsureChat(ctx context.Context, p EnsureIssueChatPara
 	if err != nil {
 		return IssueChat{}, err
 	}
-	s.chatNames.Store(uuidString(row.ID), chatName)
 	if issueLink != "" {
 		if err := s.cfg.Chats.AddChatURLTab(ctx, creds, chatID, "任务详情", issueLink); err != nil {
 			s.cfg.Logger.Warn("lark issue chat: add task tab failed", "chat_id", string(chatID), "error", err)
@@ -343,13 +337,8 @@ func (s *IssueChatService) addBots(ctx context.Context, creds InstallationCreden
 	}
 }
 
-// issueChatName names an issue's chat, with the work's status in front when
-// tag is set.
-func issueChatName(tag, identifier, title string) string {
+func issueChatName(identifier, title string) string {
 	name := "[" + identifier + "] " + strings.TrimSpace(title)
-	if tag != "" {
-		name = "【" + tag + "】" + name
-	}
 	if r := []rune(name); len(r) > 60 {
 		name = string(r[:59]) + "…"
 	}
@@ -605,7 +594,7 @@ func uniqueUUIDs(ids []pgtype.UUID) []pgtype.UUID {
 // sendIntro posts the chat's opening card, which then serves as its progress
 // card, and pins it to the top of the chat.
 func (s *IssueChatService) sendIntro(ctx context.Context, creds InstallationCredentials, row db.ChannelIssueChat, issue db.Issue, plan chatPlan) {
-	body := s.progressMarkdown(ctx, issue, s.progressState(ctx, issue)) + "\n\n" + progressHint
+	body := s.progressMarkdown(ctx, issue) + "\n\n" + progressHint
 	if len(plan.uninvited) > 0 {
 		body += "\n\n以下成员尚未绑定飞书，未能拉入群：" + strings.Join(plan.uninvited, "、")
 	}
@@ -640,7 +629,6 @@ func (s *IssueChatService) Register(bus *events.Bus) {
 	bus.Subscribe(protocol.EventIssueCreated, s.handleIssueEvent)
 	bus.Subscribe(protocol.EventIssueUpdated, s.handleIssueEvent)
 	bus.Subscribe(protocol.EventIssueMetadataChanged, s.handleMetadataEvent)
-	bus.Subscribe(protocol.EventCommentCreated, s.handleProgressComment)
 	s.registerRuns(bus)
 }
 

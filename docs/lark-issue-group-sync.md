@@ -167,8 +167,7 @@ if bound:
 | `comment:created`（来自飞书） | **不发**（payload 带 `channel_origin`） | — |
 | `comment:updated` | 更新原卡片 | 原发送者 |
 | `comment:deleted` | 原卡片改为"该评论已删除" | 原发送者 |
-| `issue:created` / `issue:updated` / `issue_metadata:changed` / 根 issue 的 `comment:created` | 不发新消息，原地刷新根群置顶的**进度卡**（群里的第一张卡片）：状态、负责人、当前在等谁（有子任务在做时写负责人；没有时若 Agent 最新一条评论 @ 了成员，写「待 xx 处理」）、进度条（issue metadata `flow` 里的阶段，按顺序排列，已过的阶段灰色、当前阶段加粗，返工类子任务归到对应阶段并标「返工 N 轮」）、已完成的步骤（只列名称）、进行中的步骤和负责人、issue metadata 里的链接（Meego、需求文档、MR、PPE 验证等）、查看任务详情 | 管家（发出进度卡的 Bot） |
-| 同上（状态感知） | **群名带状态前缀**：`【需求澄清】[DEV-14] 标题`、`【代码评审·部署 PPE】`、`【待处理】`、`【待验收】`、`【已完成】`，状态变了才改名（改名会产生一条系统消息）；**等某人处理时**（子任务指派给成员，或 Agent 最新评论 @ 了成员），用飞书「即时提醒」把群固定在这些成员消息列表的第一位，对方回复、状态变化后自动取消 | 发出进度卡的 Bot（群管理员） |
+| `issue:created` / `issue:updated` / `issue_metadata:changed` | 不发新消息，原地刷新根群置顶的**进度卡**（群里的第一张卡片）：状态、负责人、当前在等谁、子任务列表（状态 · 阶段 · 负责人）、issue metadata 里的链接（Meego、需求文档、MR、PPE 验证等）、查看任务详情 | 管家（发出进度卡的 Bot） |
 | `issue:created` 子 issue（P1） | 按 §6 开话题 | 管家 |
 | `task:*` Agent 运行进度（P2） | 运行超过 20 秒才发卡片（Leader 分派这类短运行不打扰）；无标题，显示状态、已运行时长和最近 2 条动作（只显示动作类别，如「运行命令」「修改文件」，不暴露参数），最多每 3 秒刷新；运行写了评论时卡片被评论接管（见上）；没写评论则结束时只留一行「已完成 · 用时」，失败时显示原因；已写过评论的运行不再开卡片；附「查看详情」链接 | 该 Agent 的 Bot |
 
@@ -185,7 +184,7 @@ if bound:
 
 ## 10. 权限升级
 
-- 新安装：注册客户端 `decorateQRCodeURL` 增加 `addons`，内容为 `{"scopes":{"tenant":["im:message.group_msg","im:chat.members:write_only","im:chat.tabs:write_only","im:chat.top_notice:write_only","im:chat:update","im:datasync.feed_card.time_sensitive:write"]}}`（后四项分别用于「任务详情」标签页、置顶进度卡、群名状态前缀和即时提醒）。
+- 新安装：注册客户端 `decorateQRCodeURL` 增加 `addons`，内容为 `{"scopes":{"tenant":["im:message.group_msg","im:chat.members:write_only","im:chat.tabs:write_only","im:chat.top_notice:write_only"]}}`（后两项用于群顶部的「任务详情」标签页和置顶进度卡）。
 - 已有安装：Agent 的飞书集成设置页新增"升级飞书权限"入口，生成带 `clientID=<app_id>` 和同样 `addons` 的二维码，由安装者扫码确认。
 - 开启 issue 群前检查管家 Bot 是否具备 `im:message.group_msg`（通过 `application:application:self_manage` 自查授权列表）。未具备时仍允许开启，并在介绍卡片和 Web 上提示"仅同步 @Bot 的消息"。
 
