@@ -71,6 +71,13 @@ WHERE task_id = sqlc.arg('task_id') AND kind = 'task'
 ORDER BY created_at ASC
 LIMIT 1;
 
+-- name: ConvertChannelIssueRunCardToComment :execrows
+-- A run's live card becomes the card of the comment the run wrote, so the
+-- chat shows one message per run instead of a run card and a comment card.
+UPDATE channel_issue_message
+SET kind = 'comment', comment_id = sqlc.arg('comment_id')
+WHERE channel_message_id = sqlc.arg('channel_message_id') AND kind = 'task';
+
 -- =====================
 -- identity helpers
 -- =====================

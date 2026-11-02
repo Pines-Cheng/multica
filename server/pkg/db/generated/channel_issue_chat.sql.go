@@ -11,6 +11,27 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const convertChannelIssueRunCardToComment = `-- name: ConvertChannelIssueRunCardToComment :execrows
+UPDATE channel_issue_message
+SET kind = 'comment', comment_id = $1
+WHERE channel_message_id = $2 AND kind = 'task'
+`
+
+type ConvertChannelIssueRunCardToCommentParams struct {
+	CommentID        pgtype.UUID `json:"comment_id"`
+	ChannelMessageID string      `json:"channel_message_id"`
+}
+
+// A run's live card becomes the card of the comment the run wrote, so the
+// chat shows one message per run instead of a run card and a comment card.
+func (q *Queries) ConvertChannelIssueRunCardToComment(ctx context.Context, arg ConvertChannelIssueRunCardToCommentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, convertChannelIssueRunCardToComment, arg.CommentID, arg.ChannelMessageID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createChannelIssueChat = `-- name: CreateChannelIssueChat :one
 
 INSERT INTO channel_issue_chat (

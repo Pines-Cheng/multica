@@ -241,9 +241,16 @@ func (s *IssueChatService) syncRun(ctx context.Context, ev runEvent) error {
 	st := s.runs.snapshot(ev.taskID, finish)
 	card, err := s.cfg.Store.GetChannelIssueMessageByTask(ctx, ev.taskID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// A run that ends before the delay never gets a card.
+		// A run that ends before the delay never gets a card, and neither
+		// does one that has already commented: its comment card (or the
+		// card it took over) is the run's message in the chat.
 		if finish || time.Since(st.started) < runCardDelay || !st.issueID.Valid {
 			return nil
+		}
+		if _, err := s.cfg.Store.GetLatestCommentBySourceTask(ctx, ev.taskID); err == nil {
+			return nil
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return err
 		}
 		return s.openRunCard(ctx, ev.taskID, st)
 	}
@@ -257,7 +264,9 @@ func (s *IssueChatService) syncRun(ctx context.Context, ev runEvent) error {
 	var body string
 	switch {
 	case ev.eventType == protocol.EventTaskCompleted:
-		body = s.finishedBody(ctx, inst, ev.taskID, "**已完成**", st, s.runSummary(ctx, ev.taskID))
+		// A run that commented has already turned this card into its
+		// comment; one that did not leaves only a one-line receipt.
+		body = s.finishedBody(ctx, inst, ev.taskID, "**已完成**", st, "")
 	case ev.eventType == protocol.EventTaskCancelled:
 		body = s.finishedBody(ctx, inst, ev.taskID, "**已取消**", st, "")
 	case ev.eventType == protocol.EventTaskFailed && !ev.retryPending:
@@ -291,13 +300,55 @@ func (s *IssueChatService) finishedBody(ctx context.Context, sender Installation
 	return body
 }
 
-// runSummary quotes the opening of the last comment the run wrote.
-func (s *IssueChatService) runSummary(ctx context.Context, taskID pgtype.UUID) string {
-	c, err := s.cfg.Store.GetLatestCommentBySourceTask(ctx, taskID)
-	if err != nil {
-		return ""
+// takeOverRunCard turns the live card of the run that wrote c into c's card,
+// so a run shows up in the chat as one message rather than a run card
+// followed by a near-identical comment card. Replies keep their own card:
+// they need to quote the comment they answer.
+func (s *IssueChatService) takeOverRunCard(ctx context.Context, binding db.ChannelIssueChat, commentID pgtype.UUID, c commentEvent) (bool, error) {
+	if c.SourceTaskID == nil || c.ParentID != nil {
+		return false, nil
 	}
-	return "> " + oneLine(c.Content, 120)
+	taskID, err := util.ParseUUID(*c.SourceTaskID)
+	if err != nil {
+		return false, nil
+	}
+	defer s.lock("run:" + uuidString(taskID))()
+	card, err := s.cfg.Store.GetChannelIssueMessageByTask(ctx, taskID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if card.BindingID != binding.ID {
+		return false, nil
+	}
+	inst, err := s.cfg.Store.GetLarkInstallation(ctx, card.InstallationID)
+	if err != nil {
+		return false, err
+	}
+	header := ""
+	if c.AuthorType != "agent" || c.AuthorID != uuidString(inst.AgentID) {
+		header = s.authorLabel(ctx, c)
+	}
+	cardJSON, err := s.commentCardJSON(ctx, binding.WorkspaceID, inst, header, c)
+	if err != nil {
+		return false, errSyncPermanent
+	}
+	creds, err := installationCredentialsFor(inst, s.cfg.Credentials)
+	if err != nil {
+		return false, err
+	}
+	if err := s.cfg.API.PatchInteractiveCard(ctx, PatchCardParams{InstallationID: creds, LarkCardMessageID: card.ChannelMessageID, CardJSON: cardJSON}); err != nil {
+		return false, err
+	}
+	if _, err := s.cfg.Store.ConvertChannelIssueRunCardToComment(ctx, db.ConvertChannelIssueRunCardToCommentParams{
+		ChannelMessageID: card.ChannelMessageID, CommentID: commentID,
+	}); err != nil {
+		// The card already shows the comment; a retry would post it twice.
+		s.cfg.Logger.Warn("lark issue chat: record run card takeover failed", "comment_id", c.ID, "error", err)
+	}
+	return true, nil
 }
 
 func (s *IssueChatService) detailsLink(ctx context.Context, issueID pgtype.UUID) string {

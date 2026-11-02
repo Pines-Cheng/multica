@@ -656,6 +656,8 @@ type commentEvent struct {
 	Type       string  `json:"type"`
 	ParentID   *string `json:"parent_id"`
 	DeletedAt  *string `json:"deleted_at"`
+	// SourceTaskID is the agent run that wrote the comment.
+	SourceTaskID *string `json:"source_task_id"`
 }
 
 type commentSyncJob struct {
@@ -796,6 +798,9 @@ func (s *IssueChatService) authorLabel(ctx context.Context, c commentEvent) stri
 }
 
 func (s *IssueChatService) mirrorNewComment(ctx context.Context, binding db.ChannelIssueChat, steward Installation, commentID pgtype.UUID, c commentEvent) error {
+	if taken, err := s.takeOverRunCard(ctx, binding, commentID, c); err != nil || taken {
+		return err
+	}
 	sender, header := s.commentSender(ctx, binding, steward, c)
 	target, err := s.replyTarget(ctx, binding, c)
 	if err != nil {

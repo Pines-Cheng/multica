@@ -48,16 +48,28 @@ func (f *fakeChats) AddChatMembers(_ context.Context, _ InstallationCredentials,
 // seqAPI hands out a fresh message id per send, so every mirror is mapped.
 type seqAPI struct {
 	fakeAPIClient
-	n int
+	n   int
+	ids []string
 }
 
 func (a *seqAPI) SendInteractiveCard(ctx context.Context, p SendCardParams) (string, error) {
 	a.mu.Lock()
 	a.n++
 	id := "om_seq_" + uuid.NewString()
+	a.ids = append(a.ids, id)
 	a.mu.Unlock()
 	_, _ = a.fakeAPIClient.SendInteractiveCard(ctx, p)
 	return id, nil
+}
+
+func (a *seqAPI) lastSentID(t *testing.T) string {
+	t.Helper()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.ids) == 0 {
+		t.Fatal("no card was sent")
+	}
+	return a.ids[len(a.ids)-1]
 }
 
 type activityFixture struct {
@@ -248,6 +260,52 @@ func TestIssueChatP2_RunIsOneLiveCard(t *testing.T) {
 	}
 	if len(f.api.patched) == 0 || !strings.Contains(f.api.patched[len(f.api.patched)-1].CardJSON, "已完成") {
 		t.Fatalf("completion did not settle the card: %+v", f.api.patched)
+	}
+}
+
+// The comment a run writes replaces its live card, so the chat shows the run
+// as one message, and nothing the run does afterwards brings a card back.
+func TestIssueChatP2_RunCommentTakesOverTheRunCard(t *testing.T) {
+	f := newActivityFixture(t)
+	issue := f.fx.Issue(t, "Takeover", testutil.Cols{"assignee_type": "squad", "assignee_id": f.squad})
+	f.publishIssue(protocol.EventIssueCreated, issue, nil)
+	task := uuid.NewString()
+	run := func(eventType string, payload any) {
+		f.bus.Publish(events.Event{Type: eventType, WorkspaceID: f.ws, TaskID: task, Payload: payload})
+	}
+	ids := map[string]any{"task_id": task, "agent_id": f.leader, "issue_id": issue}
+	run(protocol.EventTaskRunning, ids)
+	f.svc.runs.mu.Lock()
+	f.svc.runs.state[util.MustParseUUID(task)].started = time.Now().Add(-runCardDelay)
+	f.svc.runs.mu.Unlock()
+	run(protocol.EventTaskMessage, protocol.TaskMessagePayload{TaskID: task, Type: "tool_use", Tool: "Bash"})
+	sent := len(f.api.sent)
+	runCard := f.api.lastSentID(t)
+
+	comment := f.fx.Insert(t, "comment", testutil.Cols{
+		"issue_id": issue, "workspace_id": f.ws, "author_type": "agent", "author_id": f.leader,
+		"content": "已交付，进入代码评审", "type": "comment", "source_task_id": task,
+	})
+	f.bus.Publish(events.Event{Type: protocol.EventCommentCreated, WorkspaceID: f.ws, Payload: map[string]any{"comment": map[string]any{
+		"id": comment, "issue_id": issue, "author_type": "agent", "author_id": f.leader,
+		"content": "已交付，进入代码评审", "type": "comment", "source_task_id": task,
+	}}})
+	if len(f.api.sent) != sent {
+		t.Fatalf("the comment must reuse the run card, not post another: %+v", f.api.sent[sent:])
+	}
+	last := f.api.patched[len(f.api.patched)-1]
+	if last.LarkCardMessageID != runCard || !strings.Contains(last.CardJSON, "已交付，进入代码评审") {
+		t.Fatalf("run card was not turned into the comment: %+v", last)
+	}
+
+	patched := len(f.api.patched)
+	f.svc.runs.mu.Lock()
+	f.svc.runs.state[util.MustParseUUID(task)].patched = time.Time{}
+	f.svc.runs.mu.Unlock()
+	run(protocol.EventTaskMessage, protocol.TaskMessagePayload{TaskID: task, Type: "tool_use", Tool: "Bash"})
+	run(protocol.EventTaskCompleted, ids)
+	if len(f.api.sent) != sent || len(f.api.patched) != patched {
+		t.Fatalf("the run touched the chat after its comment: sent %+v patched %+v", f.api.sent[sent:], f.api.patched[patched:])
 	}
 }
 
