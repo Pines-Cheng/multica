@@ -349,6 +349,43 @@ func (q *Queries) GetLatestCommentBySourceTask(ctx context.Context, sourceTaskID
 	return i, err
 }
 
+const getLatestCommentForIssue = `-- name: GetLatestCommentForIssue :one
+SELECT id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids FROM comment
+WHERE issue_id = $1 AND deleted_at IS NULL
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+// The issue's newest comment, read by the progress card to tell whether the
+// work is waiting on a person an agent asked.
+func (q *Queries) GetLatestCommentForIssue(ctx context.Context, issueID pgtype.UUID) (Comment, error) {
+	row := q.db.QueryRow(ctx, getLatestCommentForIssue, issueID)
+	var i Comment
+	err := row.Scan(
+		&i.ID,
+		&i.IssueID,
+		&i.AuthorType,
+		&i.AuthorID,
+		&i.Content,
+		&i.Type,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ParentID,
+		&i.WorkspaceID,
+		&i.ResolvedAt,
+		&i.ResolvedByType,
+		&i.ResolvedByID,
+		&i.SourceTaskID,
+		&i.QuickActionID,
+		&i.ViaPluginID,
+		&i.Revision,
+		&i.RecoverySettledAt,
+		&i.DeletedAt,
+		&i.SuppressedAgentIds,
+	)
+	return i, err
+}
+
 const listChannelIssueMessagesByComment = `-- name: ListChannelIssueMessagesByComment :many
 SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at, task_id FROM channel_issue_message
 WHERE comment_id = $1

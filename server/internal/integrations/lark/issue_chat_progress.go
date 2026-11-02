@@ -83,6 +83,13 @@ func (s *IssueChatService) progressNow(ctx context.Context, issue db.Issue, chil
 	if len(active) > 0 {
 		return strings.Join(active, "；")
 	}
+	// With no sub-issue in flight, an agent's latest comment asking members
+	// for something (a confirmation, an acceptance) is what the work awaits.
+	if c, err := s.cfg.Store.GetLatestCommentForIssue(ctx, issue.ID); err == nil {
+		if who := attentionNames(commentEvent{AuthorType: c.AuthorType, Content: c.Content}); who != "" {
+			return "待 " + who + " 处理"
+		}
+	}
 	if issue.Status == "in_review" {
 		return "待验收"
 	}
@@ -178,6 +185,37 @@ func (s *IssueChatService) refreshProgress(ctx context.Context, issueID pgtype.U
 		return err
 	}
 	return s.cfg.API.PatchInteractiveCard(ctx, PatchCardParams{InstallationID: creds, LarkCardMessageID: card.ChannelMessageID, CardJSON: cardJSON})
+}
+
+// handleProgressComment refreshes a root chat's progress card when its issue
+// gets a comment: an agent asking a person, or that person answering, changes
+// what the work is waiting on.
+func (s *IssueChatService) handleProgressComment(e events.Event) {
+	// Unlike the mirror, this also runs for replies written in the chat.
+	payload, ok := e.Payload.(map[string]any)
+	if !ok {
+		return
+	}
+	var c commentEvent
+	raw, err := json.Marshal(payload["comment"])
+	if err != nil || json.Unmarshal(raw, &c) != nil {
+		return
+	}
+	issueID, err := util.ParseUUID(c.IssueID)
+	if err != nil {
+		return
+	}
+	s.dispatch(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), issueChatSyncTimeout)
+		defer cancel()
+		binding, err := s.cfg.Store.GetChannelIssueChatByIssue(ctx, db.GetChannelIssueChatByIssueParams{IssueID: issueID, ChannelType: channelTypeFeishu})
+		if err != nil || binding.RootIssueID != binding.IssueID {
+			return
+		}
+		if err := s.refreshProgress(ctx, issueID); err != nil {
+			s.cfg.Logger.Warn("lark issue chat: progress card refresh failed", "issue_id", c.IssueID, "error", err)
+		}
+	})
 }
 
 // handleMetadataEvent refreshes the progress card when an issue's links change.

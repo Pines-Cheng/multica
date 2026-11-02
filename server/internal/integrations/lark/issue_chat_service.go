@@ -629,6 +629,7 @@ func (s *IssueChatService) Register(bus *events.Bus) {
 	bus.Subscribe(protocol.EventIssueCreated, s.handleIssueEvent)
 	bus.Subscribe(protocol.EventIssueUpdated, s.handleIssueEvent)
 	bus.Subscribe(protocol.EventIssueMetadataChanged, s.handleMetadataEvent)
+	bus.Subscribe(protocol.EventCommentCreated, s.handleProgressComment)
 	s.registerRuns(bus)
 }
 

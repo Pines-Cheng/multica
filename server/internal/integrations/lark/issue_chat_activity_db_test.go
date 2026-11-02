@@ -209,6 +209,33 @@ func TestIssueChatP1_SubIssueBecomesTopicAndThreadsItsTimeline(t *testing.T) {
 	}
 }
 
+// With nothing in flight, the progress card names the person an agent's
+// latest comment asks, until that person answers.
+func TestIssueChatProgress_ShowsWhoTheWorkWaitsOn(t *testing.T) {
+	f := newActivityFixture(t)
+	issue := f.fx.Issue(t, "Waiting", testutil.Cols{"assignee_type": "squad", "assignee_id": f.squad})
+	f.publishIssue(protocol.EventIssueCreated, issue, nil)
+	comment := func(authorType, authorID, content string) {
+		id := f.fx.Insert(t, "comment", testutil.Cols{
+			"issue_id": issue, "workspace_id": f.ws, "author_type": authorType, "author_id": authorID,
+			"content": content, "type": "comment",
+		})
+		f.bus.Publish(events.Event{Type: protocol.EventCommentCreated, WorkspaceID: f.ws, Payload: map[string]any{
+			"comment": map[string]any{"id": id, "issue_id": issue, "author_type": authorType, "author_id": authorID, "content": content, "type": "comment"},
+			// A reply written in the chat refreshes the card too.
+			CommentChannelOriginKey: CommentChannelOrigin{ChannelType: "feishu", MessageID: "om_" + id},
+		}})
+	}
+	comment("agent", f.leader, "待你验收：[@Chat Owner](mention://member/"+f.user+") 请看 PPE")
+	if progress := f.progressCard(t, issue); !strings.Contains(progress, "当前：待 Chat Owner 处理") {
+		t.Fatalf("progress card does not say who the work waits on: %s", progress)
+	}
+	comment("member", f.user, "验收通过")
+	if progress := f.progressCard(t, issue); strings.Contains(progress, "待 Chat Owner 处理") {
+		t.Fatalf("progress card still waits on a person who answered: %s", progress)
+	}
+}
+
 // progressCard returns the latest render of a root chat's progress card and
 // checks it is pinned.
 func (f *activityFixture) progressCard(t *testing.T, rootIssue string) string {
@@ -336,19 +363,33 @@ func TestIssueChatP2_RunCommentTakesOverTheRunCard(t *testing.T) {
 	if len(f.api.sent) != sent {
 		t.Fatalf("the comment must reuse the run card, not post another: %+v", f.api.sent[sent:])
 	}
-	last := f.api.patched[len(f.api.patched)-1]
-	if last.LarkCardMessageID != runCard || !strings.Contains(last.CardJSON, "已交付，进入代码评审") {
+	runCardPatches := func() int {
+		n := 0
+		for _, p := range f.api.patched {
+			if p.LarkCardMessageID == runCard {
+				n++
+			}
+		}
+		return n
+	}
+	var last PatchCardParams
+	for _, p := range f.api.patched {
+		if p.LarkCardMessageID == runCard {
+			last = p
+		}
+	}
+	if !strings.Contains(last.CardJSON, "已交付，进入代码评审") {
 		t.Fatalf("run card was not turned into the comment: %+v", last)
 	}
 
-	patched := len(f.api.patched)
+	patched := runCardPatches()
 	f.svc.runs.mu.Lock()
 	f.svc.runs.state[util.MustParseUUID(task)].patched = time.Time{}
 	f.svc.runs.mu.Unlock()
 	run(protocol.EventTaskMessage, protocol.TaskMessagePayload{TaskID: task, Type: "tool_use", Tool: "Bash"})
 	run(protocol.EventTaskCompleted, ids)
-	if len(f.api.sent) != sent || len(f.api.patched) != patched {
-		t.Fatalf("the run touched the chat after its comment: sent %+v patched %+v", f.api.sent[sent:], f.api.patched[patched:])
+	if len(f.api.sent) != sent || runCardPatches() != patched {
+		t.Fatalf("the run touched the chat after its comment: sent %+v, run card patched %d times (was %d)", f.api.sent[sent:], runCardPatches(), patched)
 	}
 }
 
