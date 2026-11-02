@@ -11,6 +11,12 @@ import (
 // delete can patch it in place. A relayed entry (posted by the steward on
 // someone's behalf) carries the author as the header title.
 func issueChatCardJSON(title, subtitle, markdown string) (string, error) {
+	return issueChatCardJSONWithTemplate(title, subtitle, markdown, "grey")
+}
+
+// issueChatCardJSONWithTemplate is issueChatCardJSON with the header colour
+// chosen by the caller.
+func issueChatCardJSONWithTemplate(title, subtitle, markdown, template string) (string, error) {
 	card := map[string]any{
 		"schema": "2.0",
 		"config": map[string]any{
@@ -26,7 +32,7 @@ func issueChatCardJSON(title, subtitle, markdown string) (string, error) {
 	if title != "" {
 		header := map[string]any{
 			"title":    map[string]any{"tag": "plain_text", "content": title},
-			"template": "grey",
+			"template": template,
 		}
 		if subtitle != "" {
 			header["subtitle"] = map[string]any{"tag": "plain_text", "content": subtitle}

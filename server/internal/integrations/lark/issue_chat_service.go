@@ -797,17 +797,29 @@ func (s *IssueChatService) authorLabel(ctx context.Context, c commentEvent) stri
 
 func (s *IssueChatService) mirrorNewComment(ctx context.Context, binding db.ChannelIssueChat, steward Installation, commentID pgtype.UUID, c commentEvent) error {
 	sender, header := s.commentSender(ctx, binding, steward, c)
-	body := s.commentMarkdown(ctx, binding.WorkspaceID, c.Content)
 	target, err := s.replyTarget(ctx, binding, c)
 	if err != nil {
 		return err
 	}
-	msgID, err := s.sendCard(ctx, sender, binding, header, body, target)
+	send := func() (string, error) {
+		card, err := s.commentCardJSON(ctx, binding.WorkspaceID, sender, header, c)
+		if err != nil {
+			return "", errSyncPermanent
+		}
+		creds, err := installationCredentialsFor(sender, s.cfg.Credentials)
+		if err != nil {
+			return "", err
+		}
+		return s.cfg.API.SendInteractiveCard(ctx, SendCardParams{
+			InstallationID: creds, ChatID: ChatID(binding.ChatID), CardJSON: card, ReplyTarget: target,
+		})
+	}
+	msgID, err := send()
 	var apiErr *APIError
 	if err != nil && sender.ID != steward.ID && errors.As(err, &apiErr) {
 		// The author's bot may not be in this chat; the steward relays.
 		sender, header = steward, s.authorLabel(ctx, c)
-		msgID, err = s.sendCard(ctx, sender, binding, header, body, target)
+		msgID, err = send()
 	}
 	if err != nil {
 		return err
@@ -876,16 +888,16 @@ func (s *IssueChatService) patchMirrors(ctx context.Context, binding db.ChannelI
 		if err != nil {
 			continue
 		}
-		header, subtitle, body := "", "", "~~该评论已删除~~"
+		card, err := issueChatCardJSON("", "", "~~该评论已删除~~")
 		if c != nil && c.DeletedAt == nil {
-			body = s.commentMarkdown(ctx, binding.WorkspaceID, c.Content)
+			header := ""
 			if inst.ID == steward.ID {
 				if sender, label := s.commentSender(ctx, binding, steward, *c); sender.ID == steward.ID {
-					header, subtitle = label, "来自 Multica"
+					header = label
 				}
 			}
+			card, err = s.commentCardJSON(ctx, binding.WorkspaceID, inst, header, *c)
 		}
-		card, err := issueChatCardJSON(header, subtitle, body)
 		if err != nil {
 			continue
 		}
@@ -900,12 +912,97 @@ func (s *IssueChatService) patchMirrors(ctx context.Context, binding db.ChannelI
 	return firstErr
 }
 
-// commentMarkdown renders comment Markdown for a card: Multica references
-// become web links, and over-long bodies point to the issue.
-func (s *IssueChatService) commentMarkdown(ctx context.Context, workspaceID pgtype.UUID, content string) string {
+// commentCardJSON renders a comment's card as sender posts it. relayLabel
+// names the author when another bot relays the comment. A comment in which an
+// agent mentions members asks them for something, so its header says who
+// must act and stands out in the chat.
+func (s *IssueChatService) commentCardJSON(ctx context.Context, workspaceID pgtype.UUID, sender Installation, relayLabel string, c commentEvent) (string, error) {
+	body := s.commentMarkdown(ctx, workspaceID, sender, c.Content)
+	if who := attentionNames(c); who != "" {
+		return issueChatCardJSONWithTemplate("待 "+who+" 处理", relayLabel, body, "orange")
+	}
+	if relayLabel != "" {
+		return issueChatCardJSON(relayLabel, "来自 Multica", body)
+	}
+	return issueChatCardJSON("", "", body)
+}
+
+// attentionNames lists the members an agent's comment mentions.
+func attentionNames(c commentEvent) string {
+	if c.AuthorType != "agent" {
+		return ""
+	}
+	var names []string
+	seen := map[string]bool{}
+	for _, m := range util.MentionRe.FindAllStringSubmatch(c.Content, -1) {
+		if m[2] == "member" && !seen[m[3]] {
+			seen[m[3]] = true
+			names = append(names, m[1])
+		}
+	}
+	return strings.Join(names, "、")
+}
+
+// commentMarkdown renders comment Markdown for a card sent by sender: member
+// mentions become native Feishu mentions, other Multica references become web
+// links, and over-long bodies point to the issue.
+func (s *IssueChatService) commentMarkdown(ctx context.Context, workspaceID pgtype.UUID, sender Installation, content string) string {
+	content = s.nativeMemberMentions(ctx, workspaceID, sender, content)
 	content = linkWorkspaceReferences(ctx, s.cfg.Store, s.cfg.AppURL, workspaceID, content)
 	if r := []rune(content); len(r) > maxMirroredRunes {
 		content = string(r[:maxMirroredRunes]) + "\n\n…（内容过长，完整内容请在 Multica 中查看）"
 	}
 	return content
+}
+
+// nativeMemberMentions rewrites member mention links into Feishu mentions so
+// the member is actually notified. An open_id is only valid for the app that
+// issued it, so a member without a binding on the sending bot is rendered as
+// a bold name instead of a mention that would point at nobody.
+func (s *IssueChatService) nativeMemberMentions(ctx context.Context, workspaceID pgtype.UUID, sender Installation, content string) string {
+	matches := util.MentionRe.FindAllStringSubmatch(content, -1)
+	var userIDs []pgtype.UUID
+	seen := map[string]bool{}
+	for _, m := range matches {
+		if m[2] != "member" || seen[m[3]] {
+			continue
+		}
+		if id, err := util.ParseUUID(m[3]); err == nil {
+			seen[m[3]] = true
+			userIDs = append(userIDs, id)
+		}
+	}
+	if len(userIDs) == 0 {
+		return content
+	}
+	openIDs := map[string]string{}
+	rows, err := s.cfg.Store.ListChannelUserBindingsForUsers(ctx, db.ListChannelUserBindingsForUsersParams{
+		WorkspaceID: workspaceID, ChannelType: channelTypeFeishu,
+		UserIds: userIDs, PreferredInstallationID: sender.ID,
+	})
+	if err != nil {
+		s.cfg.Logger.Warn("lark issue chat: resolve member mentions failed", "error", err)
+	}
+	for _, row := range rows {
+		if row.InstallationID == sender.ID {
+			key := uuidString(row.MulticaUserID)
+			if openIDs[key] == "" {
+				openIDs[key] = safeMentionOpenID(row.ChannelUserID)
+			}
+		}
+	}
+	return util.MentionRe.ReplaceAllStringFunc(content, func(link string) string {
+		m := util.MentionRe.FindStringSubmatch(link)
+		if m[2] != "member" {
+			return link
+		}
+		id, err := util.ParseUUID(m[3])
+		if err != nil {
+			return link
+		}
+		if openID := openIDs[uuidString(id)]; openID != "" {
+			return "<at id=" + openID + "></at>"
+		}
+		return "**@" + m[1] + "**"
+	})
 }

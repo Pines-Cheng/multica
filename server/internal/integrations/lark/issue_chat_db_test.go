@@ -294,6 +294,35 @@ func commentCreated(id, authorType, authorID, content string, extra map[string]a
 	return events.Event{Type: protocol.EventCommentCreated, WorkspaceID: icWorkspace, Payload: payload}
 }
 
+// unescapeCardJSON decodes a card payload so assertions can read its
+// Markdown as sent, independent of JSON escaping.
+func unescapeCardJSON(t *testing.T, card string) string {
+	t.Helper()
+	var v any
+	if err := json.Unmarshal([]byte(card), &v); err != nil {
+		t.Fatalf("card is not JSON: %v", err)
+	}
+	var b strings.Builder
+	var walk func(any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			for _, e := range x {
+				walk(e)
+			}
+		case []any:
+			for _, e := range x {
+				walk(e)
+			}
+		case string:
+			b.WriteString(x)
+			b.WriteString("\n")
+		}
+	}
+	walk(v)
+	return b.String()
+}
+
 func TestIssueChatService_MirrorsComments(t *testing.T) {
 	f := newIssueChatFixture(t)
 	ctx := context.Background()
@@ -339,6 +368,43 @@ func TestIssueChatService_MirrorsComments(t *testing.T) {
 		}
 		if !strings.Contains(api.sent[0].CardJSON, `"header"`) {
 			t.Fatalf("relayed card must name its author: %s", api.sent[0].CardJSON)
+		}
+	})
+
+	t.Run("a member mention notifies the member when the sending bot knows them", func(t *testing.T) {
+		mention := "[@Ada](mention://member/" + icMember + ") please confirm"
+		api := &fakeAPIClient{sendReturn: "om_out_mention_steward"}
+		bus := events.New()
+		newSyncService(f, api).Register(bus)
+		bus.Publish(commentCreated("1c0a0000-0000-4000-8000-0000000000b1", "member", icInstaller, mention, nil))
+		if len(api.sent) != 1 {
+			t.Fatalf("sent = %+v", api.sent)
+		}
+		card := unescapeCardJSON(t, api.sent[0].CardJSON)
+		if !strings.Contains(card, "<at id=ou_ic_member></at> please confirm") {
+			t.Fatalf("steward card must mention the bound member natively: %s", card)
+		}
+		if strings.Contains(card, "处理") {
+			t.Fatalf("a member's comment must not be flagged as a request: %s", card)
+		}
+
+		// The coder bot has no binding for the member, so its open_id space
+		// cannot address them: the name stays visible without a dead mention.
+		api = &fakeAPIClient{sendReturn: "om_out_mention_coder"}
+		bus = events.New()
+		newSyncService(f, api).Register(bus)
+		bus.Publish(commentCreated("1c0a0000-0000-4000-8000-0000000000b2", "agent", icCoderAgent, mention, nil))
+		if len(api.sent) != 1 || api.sent[0].InstallationID.AppID != icCoderApp {
+			t.Fatalf("sent = %+v", api.sent)
+		}
+		card = unescapeCardJSON(t, api.sent[0].CardJSON)
+		if !strings.Contains(card, "**@Ada** please confirm") || strings.Contains(card, "<at") {
+			t.Fatalf("coder card must fall back to the bold name: %s", card)
+		}
+		// An agent asking a member for something is flagged in the header;
+		// a member's own comment is not.
+		if !strings.Contains(card, "待 Ada 处理") || !strings.Contains(api.sent[0].CardJSON, `"template":"orange"`) {
+			t.Fatalf("agent request is not flagged: %s", api.sent[0].CardJSON)
 		}
 	})
 
