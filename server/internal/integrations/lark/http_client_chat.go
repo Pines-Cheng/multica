@@ -2,6 +2,7 @@ package lark
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,6 +20,12 @@ type ChatAdmin interface {
 	AddChatURLTab(ctx context.Context, creds InstallationCredentials, chatID ChatID, name, url string) error
 	// PinTopNotice pins a message to the top of the chat.
 	PinTopNotice(ctx context.Context, creds InstallationCredentials, chatID ChatID, messageID string) error
+	// GetChatName and UpdateChatName read and set the chat's name.
+	GetChatName(ctx context.Context, creds InstallationCredentials, chatID ChatID) (string, error)
+	UpdateChatName(ctx context.Context, creds InstallationCredentials, chatID ChatID, name string) error
+	// SetChatTimeSensitive pins the chat to the top of the given users'
+	// message lists, or releases it.
+	SetChatTimeSensitive(ctx context.Context, creds InstallationCredentials, chatID ChatID, on bool, openIDs []string) error
 }
 
 // Lark id types accepted by the chat endpoints.
@@ -183,6 +190,50 @@ func (c *httpAPIClient) PinTopNotice(ctx context.Context, creds InstallationCred
 		return &APIError{Op: "pin top notice", Code: resp.Code, Msg: resp.Msg}
 	}
 	return nil
+}
+
+// chatCall sends one chat-management request and maps a Lark business error.
+func (c *httpAPIClient) chatCall(ctx context.Context, creds InstallationCredentials, method, path, op string, body any, data any) error {
+	var resp struct {
+		Code int             `json:"code"`
+		Msg  string          `json:"msg"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := c.doAuthedJSON(ctx, creds, method, path, body, &resp); err != nil {
+		return fmt.Errorf("lark http client: %s: %w", op, err)
+	}
+	if resp.Code != 0 {
+		if isTokenError(resp.Code) {
+			c.invalidateToken(creds.AppID)
+		}
+		return &APIError{Op: op, Code: resp.Code, Msg: resp.Msg}
+	}
+	if data != nil && len(resp.Data) > 0 {
+		if err := json.Unmarshal(resp.Data, data); err != nil {
+			return fmt.Errorf("lark http client: %s: decode: %w", op, err)
+		}
+	}
+	return nil
+}
+
+// GetChatName calls GET /open-apis/im/v1/chats/{chat_id}.
+func (c *httpAPIClient) GetChatName(ctx context.Context, creds InstallationCredentials, chatID ChatID) (string, error) {
+	var data struct {
+		Name string `json:"name"`
+	}
+	err := c.chatCall(ctx, creds, http.MethodGet, "/open-apis/im/v1/chats/"+url.PathEscape(string(chatID)), "get chat", nil, &data)
+	return data.Name, err
+}
+
+// UpdateChatName calls PUT /open-apis/im/v1/chats/{chat_id}.
+func (c *httpAPIClient) UpdateChatName(ctx context.Context, creds InstallationCredentials, chatID ChatID, name string) error {
+	return c.chatCall(ctx, creds, http.MethodPut, "/open-apis/im/v1/chats/"+url.PathEscape(string(chatID)), "update chat name", map[string]string{"name": name}, nil)
+}
+
+// SetChatTimeSensitive calls PATCH /open-apis/im/v2/feed_cards/{chat_id}.
+func (c *httpAPIClient) SetChatTimeSensitive(ctx context.Context, creds InstallationCredentials, chatID ChatID, on bool, openIDs []string) error {
+	path := "/open-apis/im/v2/feed_cards/" + url.PathEscape(string(chatID)) + "?user_id_type=open_id"
+	return c.chatCall(ctx, creds, http.MethodPatch, path, "set chat time sensitive", map[string]any{"time_sensitive": on, "user_ids": openIDs}, nil)
 }
 
 var _ ChatAdmin = (*httpAPIClient)(nil)
