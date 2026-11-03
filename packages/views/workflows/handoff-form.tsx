@@ -40,7 +40,7 @@ type HandoffMode = "none" | "agent" | "member";
 
 function modeOf(handler: IssueWorkflowStep["handler"]): HandoffMode {
   if (handler.type === "agent") return "agent";
-  if (handler.type === "member" || handler.type === "project_lead") return "member";
+  if (handler.type === "member" || handler.type === "project_lead" || handler.type === "creator") return "member";
   return "none";
 }
 
@@ -419,13 +419,16 @@ function HandlerPicker({
   const agentRows = kind === "agent" ? agents.filter((a) => !a.archived_at && matches(a.name)) : [];
   const memberRows = kind === "member" ? members.filter((m) => matches(m.name)) : [];
   const leadLabel = t(($) => $.workflows.handler.project_lead);
+  const creatorLabel = t(($) => $.workflows.handler.creator);
   const pick = (handler: IssueWorkflowStep["handler"]) => {
     onChange(handler);
     setOpen(false);
   };
   const is = (type: string, id?: string) => value.type === type && (id === undefined || value.id === id);
   const current =
-    value.type === "project_lead"
+    value.type === "creator"
+      ? creatorLabel
+      : value.type === "project_lead"
       ? leadLabel
       : value.id
         ? (value.type === "agent" ? agents.find((a) => a.id === value.id)?.name : members.find((m) => m.user_id === value.id)?.name) ?? ""
@@ -460,9 +463,14 @@ function HandlerPicker({
       }
     >
       {kind === "member" && !q && (
-        <PickerItem selected={is("project_lead")} onClick={() => pick({ type: "project_lead" })}>
-          <span className="truncate">{leadLabel}</span>
-        </PickerItem>
+        <>
+          <PickerItem selected={is("project_lead")} onClick={() => pick({ type: "project_lead" })}>
+            <span className="truncate">{leadLabel}</span>
+          </PickerItem>
+          <PickerItem selected={is("creator")} onClick={() => pick({ type: "creator" })}>
+            <span className="truncate">{creatorLabel}</span>
+          </PickerItem>
+        </>
       )}
       {agentRows.map((agent) => (
         <PickerItem key={agent.id} selected={is("agent", agent.id)} onClick={() => pick({ type: "agent", id: agent.id })}>

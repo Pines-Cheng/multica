@@ -90,6 +90,20 @@ describe("HandoffFields", () => {
     expect(screen.getAllByRole("combobox").length).toBe(2);
     expect(screen.getByText(/In Review/)).toBeTruthy();
   });
+
+  it("selects the issue creator without fixing a member id", async () => {
+    const onPatch = renderFields({ status_key: "in_review", handler: { type: "member" }, instructions: "" });
+    fireEvent.click(screen.getByRole("button", { name: "Choose a member" }));
+    fireEvent.click(await screen.findByText("Issue creator"));
+    expect(onPatch).toHaveBeenCalledWith({ handler: { type: "creator" } });
+  });
+
+  it("keeps a saved creator handoff in member mode", () => {
+    renderFields({ status_key: "in_review", handler: { type: "creator" }, instructions: "" });
+    expect(screen.getByRole("radio", { name: /Hand to a member/ }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("button", { name: "Choose a member" }).textContent).toContain("Issue creator");
+    expect(screen.queryByRole("textbox")).toBeNull();
+  });
 });
 
 describe("WorkflowHandoffForm", () => {

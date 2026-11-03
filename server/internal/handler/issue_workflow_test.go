@@ -442,7 +442,7 @@ func TestSetWorkflowHandoffValidatesAndClears(t *testing.T) {
 	wf := createTestWorkflow(t, "Handoff validation "+workflowTestSuffix(), "in_progress")
 	setWorkflowHandoff(t, wf.ID, "done", map[string]any{"handler": map[string]any{"type": "project_lead"}}).Want(http.StatusBadRequest)
 	setWorkflowHandoff(t, wf.ID, "code_review_nope", handToAgent(agentID, "")).Want(http.StatusBadRequest)
-	setWorkflowHandoff(t, wf.ID, "in_progress", map[string]any{"handler": map[string]any{"type": "creator"}}).Want(http.StatusBadRequest)
+	setWorkflowHandoff(t, wf.ID, "in_progress", map[string]any{"handler": map[string]any{"type": "squad", "id": testWorkspaceID}}).Want(http.StatusBadRequest)
 	setWorkflowHandoff(t, wf.ID, "in_progress", map[string]any{
 		"handler": map[string]any{"type": "agent", "id": agentID}, "next_status_key": "in_progress",
 	}).Want(http.StatusBadRequest)
@@ -469,6 +469,40 @@ func TestSetWorkflowHandoffValidatesAndClears(t *testing.T) {
 	dbfx.QueryRow(t, `SELECT steps::text FROM issue_workflow WHERE id = $1`, wf.ID).Scan(&stored)
 	if strings.Contains(stored, "handler") {
 		t.Fatalf("cleared handoff still stored: %s", stored)
+	}
+}
+
+func TestWorkflowHandoffUsesEachIssueCreator(t *testing.T) {
+	seedTestCatalog(t)
+	wf := createTestWorkflow(t, "Creator acceptance "+workflowTestSuffix(), "in_progress", "in_review")
+	setWorkflowHandoff(t, wf.ID, "in_review", map[string]any{"handler": map[string]any{"type": "creator"}}).Want(http.StatusOK)
+	projectID := createWorkflowTestProject(t, "Creator acceptance project")
+	setProjectWorkflow(t, projectID, map[string]any{"workflow_id": wf.ID}).Want(http.StatusOK)
+	other := dbfx.User(t, "Requirement creator", "workflow-creator@example.test")
+	dbfx.Member(t, testWorkspaceID, other, "member")
+	for _, creatorID := range []string{testUserID, other} {
+		issueID := dbfx.Issue(t, "Accept own requirement", testutil.Cols{
+			"project_id": projectID, "status": "in_progress", "creator_type": "member", "creator_id": creatorID,
+			"assignee_type": "member", "assignee_id": testUserID,
+		})
+		var preview WorkflowHandoffPreviewResponse
+		req := withURLParam(newRequest(http.MethodGet, "/api/issues/"+issueID+"/workflow-handoff?status=in_review", nil), "id", issueID)
+		testutil.Call(t, testHandler.PreviewWorkflowHandoff, req).Want(http.StatusOK).JSON(&preview)
+		if !preview.Handoff || preview.HandlerType != "member" || preview.HandlerID != creatorID {
+			t.Fatalf("creator handoff preview: %+v, want member %s", preview, creatorID)
+		}
+		if status, _, _ := issueStatusAndAssignee(t, issueID); status != "in_progress" {
+			t.Fatal("handoff preview changed the issue")
+		}
+		updateIssueForTest(t, issueID, map[string]any{"status": "in_review"}).Want(http.StatusOK)
+		status, kind, id := issueStatusAndAssignee(t, issueID)
+		if status != "in_review" || kind != "member" || id != creatorID {
+			t.Fatalf("acceptance assigned to %s/%s, want creator %s", kind, id, creatorID)
+		}
+		tasks, err := testHandler.Queries.ListTasksByIssue(context.Background(), util.MustParseUUID(issueID))
+		if err != nil || len(tasks) != 0 {
+			t.Fatalf("human acceptance must not start agent work: tasks=%d err=%v", len(tasks), err)
+		}
 	}
 }
 
