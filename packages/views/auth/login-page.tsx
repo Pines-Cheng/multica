@@ -55,6 +55,8 @@ interface LoginPageProps {
   onTokenObtained?: () => void;
   /** Override Google login handler (e.g. desktop opens browser externally). When provided, renders the Google button even if `google` config is omitted. */
   onGoogleLogin?: () => void;
+  onFeishuLogin?: () => void;
+  loginError?: string;
   /** Slot rendered at the bottom of the sign-in card, below the
    *  Google button. The web shell uses it for a "Prefer the desktop
    *  app?" prompt; desktop omits it (a download prompt inside the app
@@ -99,6 +101,8 @@ export function LoginPage({
   cliCallback,
   onTokenObtained,
   onGoogleLogin,
+  onFeishuLogin,
+  loginError,
   extra,
 }: LoginPageProps) {
   const { t } = useT("auth");
@@ -413,9 +417,9 @@ export function LoginPage({
           <CardTitle className="text-display-sm">
             {t(($) => $.signin.title)}
           </CardTitle>
-          <CardDescription>
+          {!onFeishuLogin && <CardDescription>
             {t(($) => $.signin.description)}
-          </CardDescription>
+          </CardDescription>}
         </CardHeader>
         <CardContent className="space-y-4">
           {sessionExpired && (
@@ -424,6 +428,20 @@ export function LoginPage({
                 {t(($) => $.errors.session_expired)}
               </AlertDescription>
             </Alert>
+          )}
+          {onFeishuLogin && (
+            <Button
+              type="button"
+              className="w-full"
+              size="lg"
+              onClick={onFeishuLogin}
+              disabled={loading}
+            >
+              {t(($) => $.signin.feishu)}
+            </Button>
+          )}
+          {loginError && (
+            <p role="alert" className="text-body text-destructive">{loginError}</p>
           )}
           <form id="login-form" onSubmit={handleSendCode} className="space-y-4">
             <div className="space-y-2">
@@ -434,7 +452,7 @@ export function LoginPage({
                 placeholder={t(($) => $.common.email_placeholder)}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                autoFocus
+                autoFocus={!onFeishuLogin}
                 required
               />
             </div>
@@ -447,6 +465,7 @@ export function LoginPage({
           <Button
             type="submit"
             form="login-form"
+            variant={onFeishuLogin ? "outline" : "default"}
             className="w-full"
             size="lg"
             disabled={!email || loading}

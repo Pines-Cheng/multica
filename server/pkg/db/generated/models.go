@@ -745,6 +745,15 @@ type Feedback struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type FeishuLoginIdentity struct {
+	AppID     string             `json:"app_id"`
+	OpenID    string             `json:"open_id"`
+	TenantKey string             `json:"tenant_key"`
+	UnionID   string             `json:"union_id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type GithubInstallation struct {
 	ID               pgtype.UUID        `json:"id"`
 	WorkspaceID      pgtype.UUID        `json:"workspace_id"`

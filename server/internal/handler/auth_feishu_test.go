@@ -1,0 +1,158 @@
+package handler
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+
+	"github.com/multica-ai/multica/server/internal/auth"
+	"github.com/multica-ai/multica/server/internal/integrations/lark"
+	"github.com/multica-ai/multica/server/internal/testutil"
+	"github.com/multica-ai/multica/server/internal/util/secretbox"
+)
+
+func feishuLoginFixture(t *testing.T) (*Handler, lark.Installation) {
+	t.Helper()
+	agentID := dbfx.Agent(t, "Feishu sign-in", "")
+	appID := "cli_login_" + strings.ReplaceAll(agentID, "-", "")
+	box, err := secretbox.New(make([]byte, secretbox.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := lark.NewInstallationService(testHandler.Queries, box)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst, err := service.Upsert(context.Background(), lark.InstallationParams{
+		WorkspaceID: parseUUID(testWorkspaceID), AgentID: parseUUID(agentID),
+		AppID: appID, AppSecret: "fixture-secret", TenantKey: "fixture-tenant",
+		BotOpenID: "ou_bot", InstallerUserID: parseUUID(testUserID),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE email = '' AND id IN (SELECT user_id FROM feishu_login_identity WHERE app_id = $1)`, appID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM feishu_login_identity WHERE app_id = $1`, appID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel_user_binding WHERE installation_id = $1`, inst.ID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel_installation WHERE id = $1`, inst.ID)
+	})
+	t.Setenv("MULTICA_FEISHU_LOGIN_APP_ID", appID)
+	h := &Handler{
+		Queries: testHandler.Queries, TxStarter: testPool, LarkInstallations: service,
+		cfg: Config{AllowSignup: true, AppURL: "https://demo.example"},
+	}
+	return h, inst
+}
+
+func TestFeishuLoginCreatesAccountsWithoutEmail(t *testing.T) {
+	h, inst := feishuLoginFixture(t)
+	ctx := context.Background()
+	first := auth.FeishuIdentity{OpenID: "ou_first", TenantKey: "fixture-tenant", Name: "First member"}
+	user, isNew, err := h.feishuLoginUser(ctx, inst, first, "")
+	if err != nil || !isNew || user.Email != "" || user.Name != first.Name {
+		t.Fatalf("first sign-in: user=%+v new=%v err=%v", user, isNew, err)
+	}
+	again, isNew, err := h.feishuLoginUser(ctx, inst, first, "")
+	if err != nil || isNew || again.ID != user.ID {
+		t.Fatalf("repeat sign-in changed account: user=%+v new=%v err=%v", again, isNew, err)
+	}
+	second, isNew, err := h.feishuLoginUser(ctx, inst, auth.FeishuIdentity{OpenID: "ou_second", TenantKey: "fixture-tenant", Name: "Second member"}, "")
+	if err != nil || !isNew || second.Email != "" || second.ID == user.ID {
+		t.Fatalf("second member must have an independent account without email: user=%+v new=%v err=%v", second, isNew, err)
+	}
+	var memberships int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM member WHERE user_id = $1`, second.ID).Scan(&memberships); err != nil || memberships != 0 {
+		t.Fatalf("sign-in must not grant workspace membership: memberships=%d err=%v", memberships, err)
+	}
+}
+
+func TestFeishuLoginPreservesExistingBotAccount(t *testing.T) {
+	h, inst := feishuLoginFixture(t)
+	dbfx.Insert(t, "channel_user_binding", testutil.Cols{
+		"workspace_id": testWorkspaceID, "installation_id": inst.ID,
+		"multica_user_id": testUserID, "channel_type": "feishu", "channel_user_id": "ou_existing",
+	})
+	user, isNew, err := h.feishuLoginUser(context.Background(), inst, auth.FeishuIdentity{OpenID: "ou_existing", TenantKey: "fixture-tenant"}, "")
+	if err != nil || isNew || uuidToString(user.ID) != testUserID {
+		t.Fatalf("existing bot link must keep its original account: user=%+v new=%v err=%v", user, isNew, err)
+	}
+}
+
+func TestFeishuLoginRespectsSignupPolicy(t *testing.T) {
+	h, inst := feishuLoginFixture(t)
+	h.cfg.AllowSignup = false
+	_, _, err := h.feishuLoginUser(context.Background(), inst, auth.FeishuIdentity{OpenID: "ou_new", TenantKey: "fixture-tenant"}, "")
+	if err != ErrSignupProhibited {
+		t.Fatalf("expected signup policy rejection, got %v", err)
+	}
+	// Existing accounts can explicitly link their identity even when signup is closed.
+	identity := auth.FeishuIdentity{OpenID: "ou_linked", TenantKey: "fixture-tenant"}
+	user, isNew, err := h.feishuLoginUser(context.Background(), inst, identity, testUserID)
+	if err != nil || isNew || uuidToString(user.ID) != testUserID {
+		t.Fatalf("explicit account link failed: user=%+v new=%v err=%v", user, isNew, err)
+	}
+	other := dbfx.User(t, "Other member", "other-feishu-link@example.test")
+	if _, _, err := h.feishuLoginUser(context.Background(), inst, identity, other); err == nil {
+		t.Fatal("an already linked identity must not move to another account")
+	}
+}
+
+func TestFeishuLoginCallback(t *testing.T) {
+	h, inst := feishuLoginFixture(t)
+	dbfx.Insert(t, "channel_user_binding", testutil.Cols{
+		"workspace_id": testWorkspaceID, "installation_id": inst.ID,
+		"multica_user_id": testUserID, "channel_type": "feishu", "channel_user_id": "ou_existing",
+	})
+	begin := httptest.NewRecorder()
+	h.BeginFeishuLogin(begin, httptest.NewRequest(http.MethodGet, "/auth/feishu/start?return_to=%2Flogin%3Fnext%3D%252Fjoin%253Fcode%253Dinvite", nil))
+	location, err := url.Parse(begin.Header().Get("Location"))
+	if err != nil || location.Host != "accounts.feishu.cn" || len(begin.Result().Cookies()) != 1 {
+		t.Fatalf("invalid authorization redirect: %s, err=%v", begin.Header().Get("Location"), err)
+	}
+	cookie := begin.Result().Cookies()[0]
+	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("OAuth cookie must survive the cross-site callback without JS access: %+v", cookie)
+	}
+	h.feishuOAuthHTTPClient = &http.Client{Transport: googleRoundTripper(func(req *http.Request) (*http.Response, error) {
+		body := `{"code":0,"access_token":"fixture-token"}`
+		if req.Method == http.MethodGet {
+			body = `{"code":0,"data":{"open_id":"ou_existing","tenant_key":"fixture-tenant","email":"not-the-account@example.test"}}`
+		}
+		return googleResponse(req, http.StatusOK, body), nil
+	})}
+	callback := httptest.NewRequest(http.MethodGet, "/auth/feishu/callback?code=provider-code&state="+url.QueryEscape(location.Query().Get("state")), nil)
+	callback.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	h.CompleteFeishuLogin(w, callback)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login?next=%2Fjoin%3Fcode%3Dinvite" {
+		t.Fatalf("lost invitation destination: status=%d location=%s", w.Code, w.Header().Get("Location"))
+	}
+	var token string
+	for _, cookie := range w.Result().Cookies() {
+		if cookie.Name == auth.AuthCookieName {
+			token = cookie.Value
+		}
+	}
+	claims, err := auth.ParseSessionToken(token)
+	if err != nil || claims["sub"] != testUserID {
+		t.Fatalf("callback did not authenticate the original account: %v", err)
+	}
+	callback.URL.RawQuery = "code=provider-code&state=wrong-state"
+	w = httptest.NewRecorder()
+	h.CompleteFeishuLogin(w, callback)
+	if !strings.Contains(w.Header().Get("Location"), "feishu_error=expired") || len(w.Result().Cookies()) != 0 {
+		t.Fatal("invalid browser state must not issue a session")
+	}
+}
+
+func TestFeishuLoginReturnPath(t *testing.T) {
+	for _, path := range []string{"https://evil.test/login", "//evil.test/login", "/some-workspace/issues"} {
+		if got := feishuLoginReturnPath(path); got != "/login" {
+			t.Fatalf("unsafe return path accepted: %q", got)
+		}
+	}
+}

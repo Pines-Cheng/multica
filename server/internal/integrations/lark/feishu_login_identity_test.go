@@ -1,0 +1,56 @@
+package lark
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/multica-ai/multica/server/internal/integrations/channel"
+	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
+	"github.com/multica-ai/multica/server/internal/testutil"
+	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
+)
+
+func TestFeishuLoginIdentityJoinsBotAfterWorkspaceMembership(t *testing.T) {
+	pool := channelScopeTestDB(t)
+	fx := testutil.New(pool, "", "")
+	userID := fx.User(t, "Feishu-only member", "")
+	workspaceID := fx.Workspace(t, "Feishu identity", "feishu-login-"+userID)
+	fx = testutil.New(pool, workspaceID, userID)
+	agentID := fx.Agent(t, "Feishu bot", "")
+	appID := "cli_login_" + agentID
+	installationID := fx.Insert(t, "channel_installation", testutil.Cols{
+		"workspace_id": workspaceID, "agent_id": agentID, "installer_user_id": userID,
+		"channel_type": "feishu", "status": "active",
+		"config": testutil.Raw("jsonb_build_object('app_id', '" + appID + "')"),
+	})
+	fx.InsertNoID(t, "feishu_login_identity", testutil.Cols{
+		"app_id": appID, "open_id": "ou_login_member", "tenant_key": "tenant", "user_id": userID,
+	}, "app_id = $1", appID)
+	store := NewChannelStore(db.New(pool))
+	inst, err := store.GetLarkInstallationByAppID(context.Background(), appID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := &feishuIdentityResolver{store: store}
+	resolved := engine.ResolvedInstallation{ID: inst.ID, WorkspaceID: inst.WorkspaceID, Platform: inst}
+	msg := channel.InboundMessage{Source: channel.Source{SenderID: "ou_login_member"}}
+	if _, err := resolver.ResolveSender(context.Background(), resolved, msg); !errors.Is(err, engine.ErrSenderNotMember) {
+		t.Fatalf("OAuth sign-in alone must not allow bot use: %v", err)
+	}
+	fx.Member(t, workspaceID, userID, "member")
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM channel_user_binding WHERE installation_id = $1`, installationID)
+	})
+	identity, err := resolver.ResolveSender(context.Background(), resolved, msg)
+	if err != nil || util.UUIDToString(identity.UserID) != userID {
+		t.Fatalf("joined member must not need an email/bot linking step: identity=%+v err=%v", identity, err)
+	}
+	link, err := store.GetLarkUserBindingByOpenID(context.Background(), GetUserBindingByOpenIDParams{
+		InstallationID: inst.ID, ChannelUserID: "ou_login_member",
+	})
+	if err != nil || util.UUIDToString(link.MulticaUserID) != userID {
+		t.Fatalf("bot account link was not materialized: link=%+v err=%v", link, err)
+	}
+}

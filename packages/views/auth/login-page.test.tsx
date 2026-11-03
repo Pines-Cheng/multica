@@ -121,6 +121,19 @@ describe("LoginPage", () => {
   // Email step rendering
   // -------------------------------------------------------------------------
 
+  it("opens Feishu sign-in without requesting an email code", async () => {
+    const onFeishuLogin = vi.fn();
+    renderWithI18n(<LoginPage onSuccess={onSuccess} onFeishuLogin={onFeishuLogin} />);
+    await userEvent.click(screen.getByRole("button", { name: "Continue with Feishu" }));
+    expect(onFeishuLogin).toHaveBeenCalledOnce();
+    expect(mockSendCode).not.toHaveBeenCalled();
+  });
+
+  it("shows an actionable provider callback error", () => {
+    renderWithI18n(<LoginPage onSuccess={onSuccess} loginError="Try Feishu sign-in again." />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Try Feishu sign-in again.");
+  });
+
   it("says the session expired when that is why the user is here", () => {
     mockAuthState.expired = true;
     renderWithI18n(<LoginPage onSuccess={onSuccess} />);

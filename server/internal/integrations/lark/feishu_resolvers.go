@@ -116,6 +116,19 @@ func (r *feishuIdentityResolver) ResolveSender(ctx context.Context, inst engine.
 			return engine.ResolvedIdentity{}, ferr
 		}
 		if !ok {
+			if platform, supported := inst.Platform.(Installation); supported {
+				identity, lookupErr := r.store.GetFeishuLoginIdentity(ctx, db.GetFeishuLoginIdentityParams{
+					AppID: platform.AppID, OpenID: msg.Source.SenderID,
+				})
+				if lookupErr != nil && !errors.Is(lookupErr, pgx.ErrNoRows) {
+					return engine.ResolvedIdentity{}, lookupErr
+				}
+				if lookupErr == nil && (!platform.TenantKey.Valid || platform.TenantKey.String == identity.TenantKey) {
+					cand, ok = UserBinding{MulticaUserID: identity.UserID}, true
+				}
+			}
+		}
+		if !ok {
 			return engine.ResolvedIdentity{}, engine.ErrSenderUnbound
 		}
 		binding, reused = cand, true

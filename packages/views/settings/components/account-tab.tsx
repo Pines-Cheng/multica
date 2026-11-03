@@ -5,7 +5,11 @@ import { Input } from "@multica/ui/components/ui/input";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
 import { useAuthStore } from "@multica/core/auth";
+import { useConfigStore } from "@multica/core/config";
 import { api } from "@multica/core/api";
+import { Button } from "@multica/ui/components/ui/button";
+import { useNavigation } from "../../navigation";
+import { openExternal } from "../../platform";
 import { AvatarUploadControl } from "../../common/avatar-upload-control";
 import { useT } from "../../i18n";
 import {
@@ -34,6 +38,9 @@ function profilesEqual(left: ProfileDraft, right: ProfileDraft) {
 
 export function AccountTab() {
   const { t } = useT("settings");
+  const { t: authT } = useT("auth");
+  const navigation = useNavigation();
+  const feishuLoginEnabled = useConfigStore((s) => s.feishuLoginEnabled);
   const user = useAuthStore((s) => s.user);
   const setUser = useAuthStore((s) => s.setUser);
 
@@ -185,6 +192,20 @@ export function AccountTab() {
             </div>
           </SettingsRow>
         </SettingsCard>
+        {feishuLoginEnabled && user?.email ? (
+          <SettingsCard>
+            <SettingsRow label={authT(($) => $.signin.feishu)}>
+              <Button variant="outline" onClick={() => {
+                const returnPath = `/login?next=${encodeURIComponent(navigation.pathname)}`;
+                openExternal(navigation.getShareableUrl(
+                  `/auth/feishu/start?link=1&return_to=${encodeURIComponent(returnPath)}`,
+                ));
+              }}>
+                {authT(($) => $.signin.feishu_link)}
+              </Button>
+            </SettingsRow>
+          </SettingsCard>
+        ) : null}
       </SettingsSection>
     </SettingsTab>
   );

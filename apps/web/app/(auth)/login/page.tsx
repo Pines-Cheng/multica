@@ -61,6 +61,7 @@ function LoginPageContent() {
   const qc = useQueryClient();
   const { t } = useT("auth");
   const googleClientId = useConfigStore((state) => state.googleClientId);
+  const feishuLoginEnabled = useConfigStore((state) => state.feishuLoginEnabled);
   const user = useAuthStore((s) => s.user);
   const isLoading = useAuthStore((s) => s.isLoading);
   const searchParams = useSearchParams();
@@ -75,6 +76,14 @@ function LoginPageContent() {
   // the user's workspace list. Sanitize first so a crafted `?next=https://evil`
   // cannot bounce the user off-origin after a successful login.
   const nextUrl = sanitizeNextUrl(searchParams.get("next"));
+  const feishuError = searchParams.get("feishu_error");
+  const feishuErrorText = !feishuError ? undefined
+    : feishuError === "link_signin" ? t(($) => $.signin.feishu_unbound)
+    : feishuError === "signup_disabled" ? t(($) => $.signin.feishu_signup_disabled)
+    : feishuError === "not_configured" ? t(($) => $.signin.feishu_not_configured)
+    : feishuError === "expired" ? t(($) => $.signin.feishu_expired)
+    : feishuError === "denied" ? t(($) => $.signin.feishu_denied)
+    : t(($) => $.signin.feishu_failed);
 
   const [desktopToken, setDesktopToken] = useState<string | null>(null);
   const [desktopError, setDesktopError] = useState("");
@@ -218,6 +227,13 @@ function LoginPageContent() {
   return (
     <LoginPage
       onSuccess={handleSuccess}
+      onFeishuLogin={feishuLoginEnabled ? () => {
+        const params = new URLSearchParams({
+          return_to: `${window.location.pathname}${window.location.search}`,
+        });
+        window.location.href = `/auth/feishu/start?${params}`;
+      } : undefined}
+      loginError={feishuErrorText}
       google={
         googleClientId
           ? {

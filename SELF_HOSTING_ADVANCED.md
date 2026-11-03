@@ -67,6 +67,37 @@ STARTTLS is used automatically when advertised by the server. Port 465 (SMTPS / 
 
 Changes take effect after restarting the backend / compose stack. The web UI reads `GOOGLE_CLIENT_ID` from `/api/config` at runtime, so no web rebuild is needed.
 
+### Feishu Sign-In (Optional)
+
+Feishu sign-in uses the identity of an already connected mainland Feishu bot.
+Set `MULTICA_FEISHU_LOGIN_APP_ID` to that bot's App ID, and register
+`<MULTICA_APP_URL>/auth/feishu/callback` under the application's **Security
+settings → Redirect URLs** in the Feishu developer console. Its available users
+must include the members who will sign in. Restart the backend after setting the
+App ID; the web login button reads this configuration at runtime. Desktop opens
+the same web login flow in the browser.
+
+The authorization flow uses S256 PKCE with the v2 token endpoint, as required by
+the [Feishu authorization API's current PKCE limitation](https://open.feishu.cn/document/common-capabilities/sso/api/obtain-oauth-code).
+
+New users can scan to create an account without an email address, then join a
+workspace through its share link. Signing in does not grant workspace membership
+or agent invocation permissions. A signed-in member can link an existing account
+under **Settings → Profile → Feishu sign-in**. Existing bindings to the selected
+bot also preserve their original Multica account on first sign-in.
+
+Accounts are keyed by the application's `open_id`, not profile email. Feishu
+profile email is not independently verified and never merges accounts or accepts
+email-specific invitations. Existing signup restrictions still apply: deployments
+that disable signup or require verified email allowlists must provision/link
+existing accounts instead of allowing new Feishu-only accounts.
+
+Migrations 605–609 allow multiple accounts without email while keeping nonempty
+email addresses unique. Database rollback of migration 606 requires assigning
+distinct verified email addresses to those accounts first; otherwise its unique
+index build rejects duplicate empty addresses. Keep the forward schema when
+rolling back only the application binaries.
+
 ### Signup Controls (Optional)
 
 | Variable | Description |
