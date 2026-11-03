@@ -26,18 +26,34 @@ type decodedIssueCard struct {
 		} `json:"subtitle"`
 	} `json:"header"`
 	Body struct {
-		Elements []struct {
-			Tag     string `json:"tag"`
-			Content string `json:"content"`
-			Text    struct {
-				Content string `json:"content"`
-			} `json:"text"`
-			Behaviors []struct {
-				Type       string `json:"type"`
-				DefaultURL string `json:"default_url"`
-			} `json:"behaviors"`
-		} `json:"elements"`
+		Elements []decodedIssueCardElement `json:"elements"`
 	} `json:"body"`
+}
+
+type decodedIssueCardElement struct {
+	Tag       string                    `json:"tag"`
+	Content   string                    `json:"content"`
+	TextAlign string                    `json:"text_align"`
+	Columns   []decodedIssueCardElement `json:"columns"`
+	Elements  []decodedIssueCardElement `json:"elements"`
+	Text      struct {
+		Content string `json:"content"`
+	} `json:"text"`
+	Behaviors []struct {
+		Type       string `json:"type"`
+		DefaultURL string `json:"default_url"`
+	} `json:"behaviors"`
+}
+
+func cardMarkdown(element decodedIssueCardElement) string {
+	text := element.Content
+	for _, column := range element.Columns {
+		text += "\n" + cardMarkdown(column)
+	}
+	for _, child := range element.Elements {
+		text += "\n" + cardMarkdown(child)
+	}
+	return text
 }
 
 func decodeIssueCard(t *testing.T, raw string) decodedIssueCard {
@@ -86,6 +102,65 @@ func TestMetadataCardLinks_OnlyUsesExistingWebLinks(t *testing.T) {
 	for _, raw := range []string{"", `{broken`, `{"report":null}`} {
 		if got := metadataCardLinks([]byte(raw)); len(got) != 0 {
 			t.Fatalf("empty or malformed metadata must not invent links: %+v", got)
+		}
+	}
+}
+
+func TestIssueCard_LightSectionsKeepProgressAndAllArtifactLinks(t *testing.T) {
+	links := metadataCardLinks([]byte(`{"Bits":"https://bits.example/task","MR":"https://code.example/mr","Meego":"https://meego.example/story","PPE":"https://ppe.example/?env=test"," prd ":"https://docs.example/spec(4)#section","自测报告":"https://tests.example/report"}`))
+	raw, err := marshalIssueCard(issueCardContent{
+		progress: []issueCardProgress{
+			{title: "[开发](https://multica.example/dev/issues/DEV-30)", status: "已完成", assignee: "Developer & Reviewer"},
+			{title: "自定义阶段", status: "人工确认"},
+		},
+		links: links, action: issueCardLink{label: "查看任务", url: "https://multica.example/dev/issues/DEV-29"},
+		footnotes: []string{progressHint},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	card := decodeIssueCard(t, raw)
+	if len(card.Body.Elements) != 4 || card.Body.Elements[2].Tag != "button" {
+		t.Fatalf("progress and artifacts must precede the unchanged task action: %s", raw)
+	}
+	progress := cardMarkdown(card.Body.Elements[0])
+	for _, want := range []string{"**子任务进度**", "[开发](https://multica.example/dev/issues/DEV-30)", "已完成", "Developer &amp; Reviewer", "自定义阶段", "人工确认"} {
+		if !strings.Contains(progress, want) {
+			t.Errorf("progress lost %q: %s", want, progress)
+		}
+	}
+	section := card.Body.Elements[1]
+	if section.Tag != "column_set" || len(section.Columns) != 1 {
+		t.Fatalf("artifacts must form a single text section: %+v", section)
+	}
+	rows := section.Columns[0].Elements
+	if len(rows) != 4 || rows[0].Content != "**关键产物**" {
+		t.Fatalf("expected a heading and three rows: %+v", rows)
+	}
+	for i, label := range []string{"需求文档 · PRD", "需求详情 · Meego", "开发任务 · Bits", "代码变更 · MR", "PPE 环境", "自测报告"} {
+		row := rows[1+i/2]
+		if len(row.Columns) != 2 || len(row.Columns[i%2].Elements) != 1 {
+			t.Fatalf("artifact text must remain in two columns: %+v", row)
+		}
+		link := row.Columns[i%2].Elements[0]
+		if link.Tag != "markdown" || !strings.Contains(link.Content, "["+label+"](") {
+			t.Errorf("artifact %s is not a text link: %+v", label, link)
+		}
+	}
+	artifacts := cardMarkdown(section)
+	for _, link := range links {
+		encodedURL := strings.NewReplacer("(", "%28", ")", "%29").Replace(link.url)
+		if !strings.Contains(artifacts, encodedURL) {
+			t.Errorf("artifact URL lost: %s", link.url)
+		}
+	}
+	if strings.Contains(raw, "background_style") || strings.Contains(raw, "callback") || strings.Count(raw, `"tag":"button"`) != 1 {
+		t.Fatalf("light sections must not introduce fills, buttons or callbacks: %s", raw)
+	}
+	for _, invalid := range [][]issueCardLink{nil, {{label: "PRD", url: "javascript:alert(1)"}}} {
+		empty, err := marshalIssueCard(issueCardContent{links: invalid})
+		if err != nil || strings.Contains(empty, "关键产物") {
+			t.Fatalf("no valid links must omit the artifact section: %s (%v)", empty, err)
 		}
 	}
 }

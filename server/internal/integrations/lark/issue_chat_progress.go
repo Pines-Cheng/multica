@@ -80,7 +80,6 @@ func (s *IssueChatService) progressCardJSON(ctx context.Context, issue db.Issue,
 		return "", err
 	}
 	if len(children) > 0 {
-		lines := []string{"**子任务进度**"}
 		var current []string
 		for _, c := range children {
 			child := childLabel(c)
@@ -88,11 +87,8 @@ func (s *IssueChatService) progressCardJSON(ctx context.Context, issue db.Issue,
 				child = issueCardMarkdownLink(issueCardLink{label: child, url: childURL})
 			}
 			childStatus, _ := issueCardStatus(c.Status, catalog)
-			line := "- " + child + " · " + childStatus
 			name := s.assigneeName(ctx, c)
-			if name != "" {
-				line += " · " + name
-			}
+			content.progress = append(content.progress, issueCardProgress{title: child, status: childStatus, assignee: name})
 			if c.Status == issuestatus.Todo || issueCardCategory(c.Status, catalog) == issuestatus.CategoryStarted {
 				activity := childLabel(c) + " · " + childStatus
 				if name != "" {
@@ -103,7 +99,6 @@ func (s *IssueChatService) progressCardJSON(ctx context.Context, issue db.Issue,
 				}
 				current = append(current, activity)
 			}
-			lines = append(lines, line)
 			if c.UpdatedAt.Time.After(updatedAt) {
 				updatedAt = c.UpdatedAt.Time
 			}
@@ -114,7 +109,6 @@ func (s *IssueChatService) progressCardJSON(ctx context.Context, issue db.Issue,
 		} else if issue.Status == issuestatus.InReview {
 			content.sections = append(content.sections, "当前：待验收")
 		}
-		content.sections = append(content.sections, strings.Join(lines, "\n"))
 	}
 	if issue.Status == issuestatus.InReview && len(children) == 0 {
 		content.sections = append(content.sections, "当前：待验收")

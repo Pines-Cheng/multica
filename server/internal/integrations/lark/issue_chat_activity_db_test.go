@@ -87,7 +87,7 @@ func TestIssueChatTabs_IsolatesRootArtifactsAndKeepsCardsOnFailure(t *testing.T)
 	f.publishIssue(protocol.EventIssueCreated, child, nil)
 	f.bus.Publish(events.Event{Type: protocol.EventIssueMetadataChanged, WorkspaceID: f.ws, Payload: map[string]any{"issue_id": child}})
 	assertTabs(binding.ChatID, "https://docs.example/root")
-	if card := f.progressCard(t, root); !strings.Contains(card, "[PRD](https://docs.example/root)") || !strings.Contains(card, "查看任务") {
+	if card := f.progressCard(t, root); !strings.Contains(card, "[需求文档 · PRD](https://docs.example/root)") || !strings.Contains(card, "查看任务") {
 		t.Fatalf("tab failure lost card information or navigation: %s", card)
 	}
 
@@ -275,14 +275,14 @@ func TestIssueChatP1_SubIssueBecomesTopicAndThreadsItsTimeline(t *testing.T) {
 		t.Fatalf("a status change posted a notice: %+v", f.api.sent[sentBefore:])
 	}
 	progress := f.progressCard(t, parent)
-	if !strings.Contains(progress, "Child · 进行中 · Leader") {
+	if !strings.Contains(progress, "Child") || !strings.Contains(progress, "进行中") || !strings.Contains(progress, "Leader") {
 		t.Fatalf("progress card does not show the sub-issue's state: %s", progress)
 	}
 
 	f.fx.Exec(t, `UPDATE issue SET metadata = '{"Meego":"https://meego.example/story/1","note":"not-a-document-link"}' WHERE id = $1`, parent)
 	f.bus.Publish(events.Event{Type: protocol.EventIssueMetadataChanged, WorkspaceID: f.ws, Payload: map[string]any{"issue_id": parent}})
 	progress = f.progressCard(t, parent)
-	if !strings.Contains(progress, "[Meego](https://meego.example/story/1)") || strings.Contains(progress, "not-a-document-link") {
+	if !strings.Contains(progress, "[需求详情 · Meego](https://meego.example/story/1)") || strings.Contains(progress, "not-a-document-link") {
 		t.Fatalf("progress card links = %s", progress)
 	}
 }
