@@ -123,9 +123,10 @@ func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		CommentDeleteKeepRepliesSupported:  true,
 		AllowSignup:                        os.Getenv("ALLOW_SIGNUP") != "false",
 		GoogleClientID:                     os.Getenv("GOOGLE_CLIENT_ID"),
-		FeishuLoginEnabled:                 h.LarkInstallations != nil && strings.TrimSpace(os.Getenv("MULTICA_FEISHU_LOGIN_APP_ID")) != "",
 		WorkspaceCreationDisabled:          os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
 	}
+	_, _, feishuErr := h.feishuLoginConfig()
+	config.FeishuLoginEnabled = feishuErr == nil
 	if h.Storage != nil {
 		config.CdnDomain = h.Storage.CdnDomain()
 	}

@@ -18,8 +18,9 @@ func TestLarkJSONFrameDecoderTextMessageInP2P(t *testing.T) {
 		},
 		"event":{
 			"sender":{
-				"sender_id":{"open_id":"ou_user"},
-				"sender_type":"user"
+				"sender_id":{"open_id":"ou_user","union_id":"on_user"},
+				"sender_type":"user",
+				"tenant_key":"tenant_sender"
 			},
 			"message":{
 				"message_id":"om_1",
@@ -50,6 +51,9 @@ func TestLarkJSONFrameDecoderTextMessageInP2P(t *testing.T) {
 	}
 	if msg.SenderOpenID != "ou_user" {
 		t.Errorf("SenderOpenID = %q", msg.SenderOpenID)
+	}
+	if msg.SenderUnionID != "on_user" || msg.SenderTenantKey != "tenant_sender" {
+		t.Errorf("sender cross-app identity = %q / %q", msg.SenderUnionID, msg.SenderTenantKey)
 	}
 	if msg.Body != "hello" {
 		t.Errorf("Body = %q", msg.Body)

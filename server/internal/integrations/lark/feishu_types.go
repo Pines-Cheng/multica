@@ -71,6 +71,8 @@ type InboundMessage struct {
 	// SenderUnionID is the sender's cross-app stable identity. It lets one
 	// account binding serve every bot of the workspace.
 	SenderUnionID string
+	// SenderTenantKey scopes cross-app login identities to the sender's enterprise.
+	SenderTenantKey string
 	// Mentions are the raw @-mentions. Issue-bound chats render them into
 	// Multica mention links, matching bots and members by union_id.
 	Mentions []InboundMention

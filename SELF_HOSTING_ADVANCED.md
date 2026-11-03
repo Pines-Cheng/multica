@@ -69,12 +69,14 @@ Changes take effect after restarting the backend / compose stack. The web UI rea
 
 ### Feishu Sign-In (Optional)
 
-Feishu sign-in uses the identity of an already connected mainland Feishu bot.
-Set `MULTICA_FEISHU_LOGIN_APP_ID` to that bot's App ID, and register
+Create a dedicated mainland Feishu application for sign-in, with its own name
+and icon. No bot capability or workspace bot installation is required. Set
+`MULTICA_FEISHU_LOGIN_APP_ID`, `MULTICA_FEISHU_LOGIN_APP_SECRET`, and
+`MULTICA_FEISHU_LOGIN_TENANT_KEY` in the backend environment, and register
 `<MULTICA_APP_URL>/auth/feishu/callback` under the application's **Security
 settings → Redirect URLs** in the Feishu developer console. Its available users
 must include the members who will sign in. Restart the backend after setting the
-App ID; the web login button reads this configuration at runtime. Desktop opens
+credentials; the web login button reads this configuration at runtime. Desktop opens
 the same web login flow in the browser.
 
 The authorization flow uses S256 PKCE with the v2 token endpoint, as required by
@@ -83,8 +85,16 @@ the [Feishu authorization API's current PKCE limitation](https://open.feishu.cn/
 New users can scan to create an account without an email address, then join a
 workspace through its share link. Signing in does not grant workspace membership
 or agent invocation permissions. A signed-in member can link an existing account
-under **Settings → Profile → Feishu sign-in**. Existing bindings to the selected
-bot also preserve their original Multica account on first sign-in.
+under **Settings → Profile → Feishu sign-in**. Login credentials and availability
+are independent of workspace bots; bot secrets remain in their existing storage.
+
+When switching from a bot application to a dedicated login application, keep
+the existing identity rows. Matching nonempty `union_id` and `tenant_key` values
+preserve the original account across apps belonging to the same developer.
+If those identifiers do not match, link the new application from the original
+signed-in account before signing out. Do not copy `open_id` values between apps.
+Members who join a workspace can also be recognized by its bots through the same
+tenant and union identity; login alone never grants bot access.
 
 Accounts are keyed by the application's `open_id`, not profile email. Feishu
 profile email is not independently verified and never merges accounts or accepts

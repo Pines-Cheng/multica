@@ -2,6 +2,7 @@ package lark
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -23,11 +24,11 @@ func TestFeishuLoginIdentityJoinsBotAfterWorkspaceMembership(t *testing.T) {
 	installationID := fx.Insert(t, "channel_installation", testutil.Cols{
 		"workspace_id": workspaceID, "agent_id": agentID, "installer_user_id": userID,
 		"channel_type": "feishu", "status": "active",
-		"config": testutil.Raw("jsonb_build_object('app_id', '" + appID + "')"),
+		"config": testutil.Raw("jsonb_build_object('app_id', '" + appID + "', 'tenant_key', 'tenant')"),
 	})
 	fx.InsertNoID(t, "feishu_login_identity", testutil.Cols{
-		"app_id": appID, "open_id": "ou_login_member", "tenant_key": "tenant", "user_id": userID,
-	}, "app_id = $1", appID)
+		"app_id": "cli_independent_" + userID, "open_id": "ou_login_member", "tenant_key": "tenant", "union_id": "on_" + userID, "user_id": userID,
+	}, "app_id = $1", "cli_independent_"+userID)
 	store := NewChannelStore(db.New(pool))
 	inst, err := store.GetLarkInstallationByAppID(context.Background(), appID)
 	if err != nil {
@@ -35,7 +36,18 @@ func TestFeishuLoginIdentityJoinsBotAfterWorkspaceMembership(t *testing.T) {
 	}
 	resolver := &feishuIdentityResolver{store: store}
 	resolved := engine.ResolvedInstallation{ID: inst.ID, WorkspaceID: inst.WorkspaceID, Platform: inst}
-	msg := channel.InboundMessage{Source: channel.Source{SenderID: "ou_login_member"}}
+	raw, err := json.Marshal(InboundMessage{SenderTenantKey: "different-tenant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := channel.InboundMessage{Source: channel.Source{SenderID: "ou_bot_member", SenderStableID: "on_" + userID}, Raw: raw}
+	if _, err := resolver.ResolveSender(context.Background(), resolved, msg); !errors.Is(err, engine.ErrSenderUnbound) {
+		t.Fatalf("identities from another tenant must not match: %v", err)
+	}
+	msg.Raw, err = json.Marshal(InboundMessage{SenderTenantKey: "tenant"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := resolver.ResolveSender(context.Background(), resolved, msg); !errors.Is(err, engine.ErrSenderNotMember) {
 		t.Fatalf("OAuth sign-in alone must not allow bot use: %v", err)
 	}
@@ -48,7 +60,7 @@ func TestFeishuLoginIdentityJoinsBotAfterWorkspaceMembership(t *testing.T) {
 		t.Fatalf("joined member must not need an email/bot linking step: identity=%+v err=%v", identity, err)
 	}
 	link, err := store.GetLarkUserBindingByOpenID(context.Background(), GetUserBindingByOpenIDParams{
-		InstallationID: inst.ID, ChannelUserID: "ou_login_member",
+		InstallationID: inst.ID, ChannelUserID: "ou_bot_member",
 	})
 	if err != nil || util.UUIDToString(link.MulticaUserID) != userID {
 		t.Fatalf("bot account link was not materialized: link=%+v err=%v", link, err)

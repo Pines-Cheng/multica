@@ -68,3 +68,33 @@ func (q *Queries) GetFeishuLoginIdentity(ctx context.Context, arg GetFeishuLogin
 	)
 	return i, err
 }
+
+const listFeishuLoginUsersByUnionID = `-- name: ListFeishuLoginUsersByUnionID :many
+SELECT DISTINCT user_id FROM feishu_login_identity
+WHERE tenant_key = $1 AND union_id = $2 AND union_id <> ''
+`
+
+type ListFeishuLoginUsersByUnionIDParams struct {
+	TenantKey string `json:"tenant_key"`
+	UnionID   string `json:"union_id"`
+}
+
+func (q *Queries) ListFeishuLoginUsersByUnionID(ctx context.Context, arg ListFeishuLoginUsersByUnionIDParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listFeishuLoginUsersByUnionID, arg.TenantKey, arg.UnionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var user_id pgtype.UUID
+		if err := rows.Scan(&user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, user_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

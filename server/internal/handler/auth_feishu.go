@@ -14,38 +14,28 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
-	"github.com/multica-ai/multica/server/internal/integrations/lark"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 const feishuLoginCookie = "multica_feishu_login"
 
-func (h *Handler) feishuLoginConfig(ctx context.Context) (auth.FeishuOAuth, lark.Installation, error) {
+func (h *Handler) feishuLoginConfig() (auth.FeishuOAuth, string, error) {
 	appID := strings.TrimSpace(os.Getenv("MULTICA_FEISHU_LOGIN_APP_ID"))
-	if appID == "" || h.LarkInstallations == nil {
-		return auth.FeishuOAuth{}, lark.Installation{}, errors.New("Feishu login is not configured")
-	}
-	inst, err := lark.NewChannelStore(h.Queries).GetLarkInstallationByAppID(ctx, appID)
-	if err != nil {
-		return auth.FeishuOAuth{}, lark.Installation{}, err
-	}
-	if inst.Status != "active" || (inst.Region != "" && inst.Region != "feishu") {
-		return auth.FeishuOAuth{}, lark.Installation{}, errors.New("Feishu login application is not active")
-	}
-	secret, err := h.LarkInstallations.DecryptAppSecret(inst)
-	if err != nil {
-		return auth.FeishuOAuth{}, lark.Installation{}, err
+	secret := strings.TrimSpace(os.Getenv("MULTICA_FEISHU_LOGIN_APP_SECRET"))
+	tenantKey := strings.TrimSpace(os.Getenv("MULTICA_FEISHU_LOGIN_TENANT_KEY"))
+	if appID == "" || secret == "" || tenantKey == "" {
+		return auth.FeishuOAuth{}, "", errors.New("Feishu login is not configured")
 	}
 	appURL := strings.TrimRight(strings.TrimSpace(h.cfg.AppURL), "/")
 	base, err := url.Parse(appURL)
 	if err != nil || base.Host == "" || base.User != nil || (base.Scheme != "http" && base.Scheme != "https") {
-		return auth.FeishuOAuth{}, lark.Installation{}, errors.New("application URL is not configured")
+		return auth.FeishuOAuth{}, "", errors.New("application URL is not configured")
 	}
 	return auth.FeishuOAuth{
 		AppID: appID, AppSecret: secret, RedirectURI: appURL + "/auth/feishu/callback",
 		HTTPClient: h.feishuOAuthHTTPClient,
-	}, inst, nil
+	}, tenantKey, nil
 }
 
 func feishuLoginReturnPath(raw string) string {
@@ -73,7 +63,7 @@ func feishuLoginRedirect(w http.ResponseWriter, r *http.Request, returnPath, cod
 func (h *Handler) BeginFeishuLogin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	returnPath := feishuLoginReturnPath(r.URL.Query().Get("return_to"))
-	cfg, _, err := h.feishuLoginConfig(r.Context())
+	cfg, _, err := h.feishuLoginConfig()
 	if err != nil {
 		feishuLoginRedirect(w, r, returnPath, "not_configured")
 		return
@@ -121,7 +111,7 @@ func (h *Handler) CompleteFeishuLogin(w http.ResponseWriter, r *http.Request) {
 		feishuLoginRedirect(w, r, "/login", "expired")
 		return
 	}
-	cfg, inst, err := h.feishuLoginConfig(r.Context())
+	cfg, tenantKey, err := h.feishuLoginConfig()
 	if err != nil || cfg.AppID != state.AppID {
 		feishuLoginRedirect(w, r, state.ReturnPath, "not_configured")
 		return
@@ -141,12 +131,12 @@ func (h *Handler) CompleteFeishuLogin(w http.ResponseWriter, r *http.Request) {
 		feishuLoginRedirect(w, r, state.ReturnPath, "failed")
 		return
 	}
-	if inst.TenantKey.Valid && inst.TenantKey.String != identity.TenantKey {
+	if tenantKey != identity.TenantKey {
 		slog.Warn("Feishu sign-in tenant does not match application")
 		feishuLoginRedirect(w, r, state.ReturnPath, "failed")
 		return
 	}
-	user, isNew, err := h.feishuLoginUser(r.Context(), inst, identity, state.LinkUserID)
+	user, isNew, err := h.feishuLoginUser(r.Context(), cfg.AppID, identity, state.LinkUserID)
 	if err != nil {
 		slog.Warn("Feishu sign-in account resolution failed", "error", err)
 		errorCode := "failed"
@@ -177,14 +167,14 @@ func (h *Handler) CompleteFeishuLogin(w http.ResponseWriter, r *http.Request) {
 	feishuLoginRedirect(w, r, state.ReturnPath, "")
 }
 
-func (h *Handler) feishuLoginUser(ctx context.Context, inst lark.Installation, identity auth.FeishuIdentity, linkUserID string) (db.User, bool, error) {
+func (h *Handler) feishuLoginUser(ctx context.Context, appID string, identity auth.FeishuIdentity, linkUserID string) (db.User, bool, error) {
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		return db.User{}, false, err
 	}
 	defer tx.Rollback(ctx)
 	q := h.Queries.WithTx(tx)
-	linked, err := q.GetFeishuLoginIdentity(ctx, db.GetFeishuLoginIdentityParams{AppID: inst.AppID, OpenID: identity.OpenID})
+	linked, err := q.GetFeishuLoginIdentity(ctx, db.GetFeishuLoginIdentityParams{AppID: appID, OpenID: identity.OpenID})
 	if err == nil {
 		if linked.TenantKey != identity.TenantKey || (linkUserID != "" && uuidToString(linked.UserID) != linkUserID) {
 			return db.User{}, false, errors.New("Feishu identity belongs to a different account")
@@ -195,39 +185,33 @@ func (h *Handler) feishuLoginUser(ctx context.Context, inst lark.Installation, i
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return db.User{}, false, err
 	}
-	err = nil
+	// open_id changes between apps. A matching tenant and union_id preserve
+	// the account when switching the login application of the same developer.
+	users, err := q.ListFeishuLoginUsersByUnionID(ctx, db.ListFeishuLoginUsersByUnionIDParams{
+		TenantKey: identity.TenantKey, UnionID: identity.UnionID,
+	})
+	if err != nil {
+		return db.User{}, false, err
+	}
+	if len(users) > 1 || (len(users) == 1 && linkUserID != "" && uuidToString(users[0]) != linkUserID) {
+		return db.User{}, false, errors.New("Feishu identity belongs to a different account")
+	}
 	var user db.User
 	isNew := false
 	if linkUserID != "" {
 		user, err = q.GetUser(ctx, parseUUID(linkUserID))
+	} else if len(users) == 1 {
+		user, err = q.GetUser(ctx, users[0])
 	} else {
-		// An existing bot link is explicit account ownership proof. Profile
-		// email is not verified by Feishu and must never merge existing accounts.
-		binding, bindingErr := q.GetChannelUserBindingByUserID(ctx, db.GetChannelUserBindingByUserIDParams{
-			InstallationID: inst.ID, ChannelUserID: identity.OpenID,
-		})
-		if bindingErr == nil && binding.WorkspaceID == inst.WorkspaceID && binding.ChannelType == "feishu" {
-			member, memberErr := lark.NewChannelStore(q).IsWorkspaceMember(ctx, inst.WorkspaceID, binding.MulticaUserID)
-			if memberErr != nil {
-				return db.User{}, false, memberErr
-			}
-			if member {
-				user, err = q.GetUser(ctx, binding.MulticaUserID)
-			}
-		} else if bindingErr != nil && !errors.Is(bindingErr, pgx.ErrNoRows) {
-			return db.User{}, false, bindingErr
+		if err := h.checkSignupAllowed(ctx, "", true); err != nil {
+			return db.User{}, false, err
 		}
-		if !user.ID.Valid && err == nil {
-			if err := h.checkSignupAllowed(ctx, "", true); err != nil {
-				return db.User{}, false, err
-			}
-			name := strings.TrimSpace(identity.Name)
-			if name == "" {
-				name = "Feishu"
-			}
-			user, err = q.CreateUser(ctx, db.CreateUserParams{Name: name, Email: ""})
-			isNew = true
+		name := strings.TrimSpace(identity.Name)
+		if name == "" {
+			name = "Feishu"
 		}
+		user, err = q.CreateUser(ctx, db.CreateUserParams{Name: name, Email: ""})
+		isNew = true
 	}
 	if err != nil {
 		return db.User{}, false, err
@@ -236,7 +220,7 @@ func (h *Handler) feishuLoginUser(ctx context.Context, inst lark.Installation, i
 		return db.User{}, false, auth.ErrTemporarilyDisabledUser
 	}
 	if _, err := q.CreateFeishuLoginIdentity(ctx, db.CreateFeishuLoginIdentityParams{
-		AppID: inst.AppID, OpenID: identity.OpenID, TenantKey: identity.TenantKey,
+		AppID: appID, OpenID: identity.OpenID, TenantKey: identity.TenantKey,
 		UnionID: identity.UnionID, UserID: user.ID,
 	}); err != nil {
 		return db.User{}, false, err
