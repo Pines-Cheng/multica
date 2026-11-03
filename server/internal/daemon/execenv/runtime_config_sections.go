@@ -880,6 +880,8 @@ func writeOutput(b *strings.Builder, kind taskKind, ctx TaskContextForEnv) {
 		}
 		b.WriteString("**Post exactly ONE comment per run — your final result, before this turn exits.** Do NOT post progress updates or plans along the way. Only a scheduled wakeup check whose `[WAKEUP]` block offers `multica issue wakeup checkin` may check in instead of commenting, when it found nothing that needs a reply.\n\n")
 		b.WriteString("Keep comments concise and natural — state the outcome, not the process.\n\n")
+		b.WriteString("For longer comments, use short paragraphs separated by blank lines and descriptive Markdown links. Use numbered lists for ordered steps and bullet lists for parallel points, with each item on its own line. Add short bold section labels only where they help scanning. Keep simple replies brief; do not force them into a template.\n")
+		b.WriteString("When requesting human help or acceptance, lead with the specific action needed. Include relevant links and checks with expected results when useful. Ask for a reply or confirmation only when it is needed to continue.\n\n")
 		b.WriteString("**Delivering files here:** pass `--attachment <path>` to `multica issue comment add` (repeatable) — the only way a screenshot or artifact reaches the reader.\n")
 		writeInlineBlocksPolicy(b)
 	}
