@@ -229,6 +229,7 @@ func (s *IssueChatService) EnsureChat(ctx context.Context, p EnsureIssueChatPara
 		}
 	}
 	s.sendIntro(ctx, creds, row, issue, plan)
+	s.syncArtifactTabs(ctx, row)
 	return s.chatView(ctx, row), nil
 }
 

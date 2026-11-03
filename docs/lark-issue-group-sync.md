@@ -125,6 +125,12 @@ Multica 是唯一事实源和执行方；botmux 只作交互参考，不参与�
 4. 写入 `channel_issue_chat`（唯一索引兜底并发）。
 5. 管家发介绍卡片：标题、状态、负责人、Web 链接、"在群里 @Agent 即可让它干活"。
 
+**关键产物 Tab**：建群及后续任务进度/metadata 刷新时，从群对应的根任务 metadata 提取 `Bits`、`MR`、`Meego`、`PPE`、`PRD` 的有效 HTTP(S) 链接（键名忽略大小写和首尾空格），按这五个名称添加或更新群顶部的网页 Tab，并设置 `is_built_in=true`，在飞书内打开。各任务独立同步，子任务话题的链接不会覆盖根任务的 Tab。原卡片链接及"查看任务"按钮行为保持不变。
+
+- 先读取已有 Tab，再按名称更新链接或补建；链接和内打开设置未变时不写入，重复刷新不新增副本。
+- 这五个名称用于产物网页 Tab；其他名称以及同名的文档 Tab 保留。移除 metadata 链接时不自动删除群 Tab，避免删除群内维护的资料。
+- 同步失败仅记日志，卡片和任务流转继续。飞书每群最多 20 个自定义 Tab；已达上限、缺少权限或目标站点登录限制仍适用。已有群在下一次任务事件时同步，不在启动时批量修改。
+
 **子 issue（存在已绑定的祖先）**
 
 1. 找到最近的已绑定祖先所在的群。
@@ -186,7 +192,7 @@ if bound:
 
 ## 10. 权限升级
 
-- 新安装：注册客户端 `decorateQRCodeURL` 增加 `addons`，内容为 `{"scopes":{"tenant":["im:message.group_msg","im:chat.members:write_only","im:chat.tabs:write_only","im:chat.top_notice:write_only"]}}`（后两项用于群顶部的「任务详情」标签页和置顶进度卡）。
+- 新安装：注册客户端 `decorateQRCodeURL` 增加 `addons`，内容为 `{"scopes":{"tenant":["im:message.group_msg","im:chat.members:write_only","im:chat.tabs:read","im:chat.tabs:write_only","im:chat.top_notice:write_only"]}}`（Tab 读取/写入权限用于查询已有标签页、添加任务详情和同步关键产物；top notice 权限用于置顶进度卡）。
 - 已有安装：Agent 的飞书集成设置页新增"升级飞书权限"入口，生成带 `clientID=<app_id>` 和同样 `addons` 的二维码，由安装者扫码确认。
 - 开启 issue 群前检查管家 Bot 是否具备 `im:message.group_msg`（通过 `application:application:self_manage` 自查授权列表）。未具备时仍允许开启，并在介绍卡片和 Web 上提示"仅同步 @Bot 的消息"。
 

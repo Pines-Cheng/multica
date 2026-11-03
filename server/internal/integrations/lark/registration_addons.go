@@ -16,6 +16,7 @@ import (
 var registrationAddons = []string{
 	"im:message.group_msg",
 	"im:chat.members:write_only",
+	"im:chat.tabs:read",
 	"im:chat.tabs:write_only",
 	"im:chat.top_notice:write_only",
 }

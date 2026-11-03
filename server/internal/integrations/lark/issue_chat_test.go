@@ -100,7 +100,7 @@ func TestDecorateQRCodeURL_AddonsAndClientID(t *testing.T) {
 	for _, s := range tenant {
 		got[s.(string)] = true
 	}
-	for _, want := range []string{"im:message.group_msg", "im:chat.members:write_only"} {
+	for _, want := range []string{"im:message.group_msg", "im:chat.members:write_only", "im:chat.tabs:read", "im:chat.tabs:write_only"} {
 		if !got[want] {
 			t.Errorf("addons missing scope %q: %v", want, tenant)
 		}

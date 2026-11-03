@@ -225,6 +225,7 @@ func (s *IssueChatService) refreshBoundIssueCard(ctx context.Context, binding db
 		return nil
 	}
 	defer s.lock("progress:" + uuidString(binding.ID))()
+	defer s.syncArtifactTabs(ctx, binding)
 	topic := binding.RootIssueID != binding.IssueID
 	var card db.ChannelIssueMessage
 	var err error

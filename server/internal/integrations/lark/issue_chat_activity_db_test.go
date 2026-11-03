@@ -2,6 +2,8 @@ package lark
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -18,11 +20,17 @@ import (
 
 // fakeChats records chat management calls.
 type fakeChats struct {
-	mu      sync.Mutex
-	created []CreateChatParams
-	added   []AddChatMembersParams
-	tabs    []string
-	pinned  []string
+	mu         sync.Mutex
+	created    []CreateChatParams
+	added      []AddChatMembersParams
+	tabs       []string
+	syncedTabs []struct {
+		chatID ChatID
+		appID  string
+		tabs   []ChatURLTab
+	}
+	tabSyncErr error
+	pinned     []string
 }
 
 func (f *fakeChats) CreateChat(_ context.Context, _ InstallationCredentials, p CreateChatParams) (ChatID, error) {
@@ -37,6 +45,76 @@ func (f *fakeChats) AddChatURLTab(_ context.Context, _ InstallationCredentials, 
 	defer f.mu.Unlock()
 	f.tabs = append(f.tabs, name+"="+url)
 	return nil
+}
+
+func (f *fakeChats) SyncChatURLTabs(_ context.Context, creds InstallationCredentials, chatID ChatID, tabs []ChatURLTab) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.syncedTabs = append(f.syncedTabs, struct {
+		chatID ChatID
+		appID  string
+		tabs   []ChatURLTab
+	}{chatID: chatID, appID: creds.AppID, tabs: append([]ChatURLTab(nil), tabs...)})
+	return f.tabSyncErr
+}
+
+func TestIssueChatTabs_IsolatesRootArtifactsAndKeepsCardsOnFailure(t *testing.T) {
+	f := newActivityFixture(t)
+	f.svc.cfg.AppURL = "https://multica.example"
+	root := f.fx.Issue(t, "Root", testutil.Cols{
+		"assignee_type": "squad", "assignee_id": f.squad,
+		"metadata": `{"PRD":"https://docs.example/root","note":"https://other.example"}`,
+	})
+	f.chats.tabSyncErr = errors.New("tab permission denied")
+	f.publishIssue(protocol.EventIssueCreated, root, nil)
+	binding, ok := f.binding(t, root)
+	if !ok || len(f.chats.syncedTabs) == 0 || len(f.chats.pinned) != 1 {
+		t.Fatal("tab failure must not prevent chat binding or the pinned card")
+	}
+	assertTabs := func(chatID string, url string) {
+		t.Helper()
+		last := f.chats.syncedTabs[len(f.chats.syncedTabs)-1]
+		if string(last.chatID) != chatID || !reflect.DeepEqual(last.tabs, []ChatURLTab{{Name: "PRD", URL: url}}) {
+			t.Fatalf("wrong task's artifacts: %+v", last)
+		}
+	}
+	assertTabs(binding.ChatID, "https://docs.example/root")
+
+	child := f.fx.Issue(t, "Child", testutil.Cols{
+		"parent_issue_id": root,
+		"metadata":        `{"PRD":"https://docs.example/child"}`,
+	})
+	f.publishIssue(protocol.EventIssueCreated, child, nil)
+	f.bus.Publish(events.Event{Type: protocol.EventIssueMetadataChanged, WorkspaceID: f.ws, Payload: map[string]any{"issue_id": child}})
+	assertTabs(binding.ChatID, "https://docs.example/root")
+	if card := f.progressCard(t, root); !strings.Contains(card, "[PRD](https://docs.example/root)") || !strings.Contains(card, "查看任务") {
+		t.Fatalf("tab failure lost card information or navigation: %s", card)
+	}
+
+	f.chats.tabSyncErr = nil
+	f.fx.Exec(t, `UPDATE issue SET metadata = '{"PRD":"https://docs.example/revised"}' WHERE id = $1`, root)
+	f.bus.Publish(events.Event{Type: protocol.EventIssueMetadataChanged, WorkspaceID: f.ws, Payload: map[string]any{"issue_id": root}})
+	assertTabs(binding.ChatID, "https://docs.example/revised")
+
+	other := f.fx.Issue(t, "Independent", testutil.Cols{
+		"assignee_type": "squad", "assignee_id": f.squad,
+		"metadata": `{"PRD":"https://docs.example/independent"}`,
+	})
+	f.publishIssue(protocol.EventIssueCreated, other, nil)
+	otherBinding, ok := f.binding(t, other)
+	if !ok || otherBinding.ChatID == binding.ChatID {
+		t.Fatal("independent tasks must have independent groups")
+	}
+	assertTabs(otherBinding.ChatID, "https://docs.example/independent")
+
+	newAgent := f.fx.Agent(t, "New tab steward", f.fx.Runtime(t, "new-tab-runtime"))
+	newSteward := f.installBot(t, newAgent, "cli_tabs_new_steward")
+	f.fx.Exec(t, `UPDATE issue SET assignee_type = 'agent', assignee_id = $2 WHERE id = $1`, root, newAgent)
+	f.publishIssue(protocol.EventIssueUpdated, root, map[string]any{"assignee_changed": true})
+	assertTabs(binding.ChatID, "https://docs.example/revised")
+	if got := f.chats.syncedTabs[len(f.chats.syncedTabs)-1].appID; got != newSteward.AppID {
+		t.Fatalf("tab sync app = %s, want current steward %s", got, newSteward.AppID)
+	}
 }
 
 func (f *fakeChats) PinTopNotice(_ context.Context, _ InstallationCredentials, _ ChatID, messageID string) error {
