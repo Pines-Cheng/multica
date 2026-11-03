@@ -67,15 +67,15 @@ describe("workflowColumns (MUL-7420)", () => {
 
 describe("useColumnWorkflow (MUL-7420)", () => {
   it("follows Default outside a project without feature flag configuration", () => {
-    expect(useColumnWorkflow("ws-1", null, false).workflow).toBe(defaultWithoutBlocked);
+    expect(useColumnWorkflow("ws-1", { type: "workspace", actorKind: "all" }, false).workflow).toBe(defaultWithoutBlocked);
   });
 
   it("follows the project's workflow on a project board", () => {
-    expect(useColumnWorkflow("ws-1", "project-1", false).workflow).toBe(defaultWithoutBlocked);
+    expect(useColumnWorkflow("ws-1", { type: "project", projectId: "project-1" }, false).workflow).toBe(defaultWithoutBlocked);
   });
 
   it("lets an explicit status filter reach a status the project's workflow dropped", () => {
-    const { workflow: selected } = useColumnWorkflow("ws-1", "project-1", true);
+    const { workflow: selected } = useColumnWorkflow("ws-1", { type: "project", projectId: "project-1" }, true);
     expect(workflowColumns(["blocked"], selected)).toEqual(["blocked"]);
   });
 });

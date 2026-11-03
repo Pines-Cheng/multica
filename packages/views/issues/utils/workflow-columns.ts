@@ -1,5 +1,6 @@
 import { defaultWorkflow, useIssueWorkflows, useProjectWorkflow } from "@multica/core/issue-workflows";
 import type { IssueStatus, IssueWorkflow } from "@multica/core/types";
+import type { IssueScope } from "@multica/core/issues/surface/scope";
 
 /**
  * The status columns of a surface whose columns follow a workflow (MUL-7420):
@@ -21,19 +22,21 @@ export function workflowColumns(
 
 /**
  * The workflow a surface's columns follow (MUL-7420). A project surface shows
- * its project's columns. Elsewhere, columns follow Default.
+ * its project's columns. Personal tasks span workflows and use the whole
+ * status catalog. Other surfaces follow Default.
  * A status outside the workflow is never a column; a status filter
  * that picks keys explicitly shows exactly those — on a project too, which is
  * how an issue left in a status its workflow no longer lists is found.
  */
 export function useColumnWorkflow(
   wsId: string,
-  projectId: string | null | undefined,
+  scope: IssueScope,
   hasStatusFilter: boolean,
 ): { workflow: IssueWorkflow | null } {
   const { workflows } = useIssueWorkflows(wsId);
+  const projectId = scope.type === "project" ? scope.projectId : null;
   const projectWorkflow = useProjectWorkflow(wsId, projectId);
-  if (hasStatusFilter) return { workflow: null };
+  if (hasStatusFilter || scope.type === "my") return { workflow: null };
   if (projectId) return { workflow: projectWorkflow };
   return { workflow: defaultWorkflow(workflows) };
 }

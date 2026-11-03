@@ -242,7 +242,7 @@ export function useIssueSurfaceController({
   const listCollapsedStatuses = useViewStore((s) => s.listCollapsedStatuses);
   const hiddenStatusKeys = useViewStore((s) => s.hiddenStatuses);
   const catalog = useIssueStatuses(wsId);
-  const { workflow: projectWorkflow } = useColumnWorkflow(wsId, projectId, statusFilters.length > 0);
+  const { workflow: projectWorkflow } = useColumnWorkflow(wsId, scope, statusFilters.length > 0);
   const [tableSearch, setTableSearch] = useState("");
 
   const allowedModes = useMemo(() => new Set<IssueSurfaceMode>(modes), [modes]);
@@ -743,6 +743,7 @@ export function useIssueSurfaceController({
 
   const data = useIssueSurfaceData({
     wsId,
+    scope,
     queryPlan,
     projectId,
     usesGantt,

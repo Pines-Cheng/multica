@@ -12,6 +12,7 @@ import {
   pruneIssueSurfaceViewStates,
 } from "@multica/core/issues/stores/surface-view-store";
 import { ViewStoreProvider } from "@multica/core/issues/stores/view-store-context";
+import { issueWorkflowKeys } from "@multica/core/issue-workflows/queries";
 import type { IssueStatusEntry, IssueTableGroupsRequest, IssueTableRowsRequest } from "@multica/core/types";
 import { useIssueSurfaceController } from "./use-issue-surface-controller";
 
@@ -111,6 +112,46 @@ afterEach(() => {
   cleanup();
   qc.clear();
   vi.restoreAllMocks();
+});
+
+describe("useIssueSurfaceController — personal tasks across workflows", () => {
+  it.each(["board", "list", "swimlane"] as const)("keeps custom project statuses visible in my %s after Default loads", async (mode) => {
+    installApi(async () => ({ statuses: [QA_ENTRY], categories: [], total: 1 }));
+    qc.setQueryData(issueWorkflowKeys.list("ws-1"), {
+      workflows: [{
+        id: "default",
+        is_default: true,
+        steps: ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"].map((status_key) => ({
+          status_key,
+          handler: { type: "none" },
+          instructions: "",
+        })),
+      }],
+    });
+    const { store, Wrapper } = makeWrapper(qc, "my:user-1:all");
+    act(() => store.getState().setViewMode(mode));
+
+    const { result } = renderHook(
+      () => useIssueSurfaceController({
+        scope: { type: "my", userId: "user-1", relation: "all" },
+        modes: [mode],
+      }),
+      { wrapper: Wrapper },
+    );
+
+    await waitFor(() => expect(result.current.visibleStatuses).toContain("qa"));
+    expect(result.current.columnStatuses).toContain("qa");
+    if (mode === "swimlane") {
+      await waitFor(() => {
+        const request = groupRequests.find((request) => request.group.kind === "compound");
+        expect(request?.group).toMatchObject({ secondary_values: expect.arrayContaining(["qa"]) });
+      });
+    } else {
+      await waitFor(() => expect(rowRequests.some((request) =>
+        request.query.scope.kind === "my" && request.group_key === "status:qa",
+      )).toBe(true));
+    }
+  });
 });
 
 describe("useIssueSurfaceController — custom status filter vs a late catalog", () => {

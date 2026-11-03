@@ -7,6 +7,7 @@ import { projectListOptions } from "@multica/core/projects/queries";
 import { childIssueProgressOptions } from "@multica/core/issues/queries";
 import { issueSurfaceGanttOptions } from "@multica/core/issues/surface/repository";
 import type { IssueSurfaceQueryPlan } from "@multica/core/issues/surface/query-plan";
+import type { IssueScope } from "@multica/core/issues/surface/scope";
 import type { IssueStatus, ProjectStatus, PropertyFilterValue } from "@multica/core/types";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { useColumnWorkflow, workflowColumns } from "../utils/workflow-columns";
@@ -96,6 +97,7 @@ export interface IssueSurfaceData {
 
 export function useIssueSurfaceData({
   wsId,
+  scope,
   queryPlan,
   projectId,
   usesGantt,
@@ -122,6 +124,7 @@ export function useIssueSurfaceData({
   loadProjects,
 }: {
   wsId: string;
+  scope: IssueScope;
   queryPlan: IssueSurfaceQueryPlan;
   projectId?: string;
   usesGantt: boolean;
@@ -371,10 +374,8 @@ export function useIssueSurfaceData({
   );
 
   const catalog = useIssueStatuses(wsId);
-  // Columns follow the project's workflow, or Default outside a project.
-  // (MUL-7420)
-  const { workflow: projectWorkflow } = useColumnWorkflow(wsId, projectId, statusFilters.length > 0);
-  const { workflow: scopeWorkflow } = useColumnWorkflow(wsId, projectId, false);
+  const { workflow: projectWorkflow } = useColumnWorkflow(wsId, scope, statusFilters.length > 0);
+  const { workflow: scopeWorkflow } = useColumnWorkflow(wsId, scope, false);
 
   const visibleStatuses = useMemo<IssueStatus[]>(() => {
     // An explicit exact-key filter wins over hidden column preferences.
