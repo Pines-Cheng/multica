@@ -48,7 +48,7 @@ func newIssueChatFixture(t *testing.T) *issueChatFixture {
 	pool := channelScopeTestDB(t)
 	ctx := context.Background()
 	clean := func() {
-		for _, table := range []string{"channel_issue_message", "channel_issue_chat", "channel_installation", "channel_user_binding"} {
+		for _, table := range []string{"channel_issue_comment_pending", "channel_issue_message", "channel_issue_chat", "channel_installation", "channel_user_binding"} {
 			_, _ = pool.Exec(context.Background(), "DELETE FROM "+table+" WHERE workspace_id = $1", icWorkspace)
 		}
 	}
@@ -191,31 +191,32 @@ func TestIssueChatRouter_RecordComment(t *testing.T) {
 	if err := r.RecordIssueComment(ctx, inst, identity, route, msg); err != nil {
 		t.Fatalf("record: %v", err)
 	}
-	if len(writer.calls) != 1 {
-		t.Fatalf("writer calls = %d, want 1", len(writer.calls))
+	if len(writer.calls) != 0 {
+		t.Fatal("the connector ACK path must only enqueue, not write comments")
 	}
-	got := writer.calls[0]
+	var raw []byte
+	if err := f.pool.QueryRow(ctx, `SELECT message FROM channel_issue_comment_pending WHERE channel_message_id = $1`, lm.MessageID).Scan(&raw); err != nil {
+		t.Fatalf("load queued message: %v", err)
+	}
+	var queued InboundMessage
+	if err := json.Unmarshal(raw, &queued); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.renderComment(ctx, route.WorkspaceID, queued, flattenContent(queued.MessageType, queued.Content))
 	want := "[@Coder](mention://agent/" + icCoderAgent + ") [@Ada](mention://member/" + icMember + ") please look"
-	if got.Content != want {
-		t.Fatalf("content = %q\nwant      %q", got.Content, want)
+	if err != nil || got != want {
+		t.Fatalf("content = %q, err=%v, want %q", got, err, want)
 	}
-	if uuidString(got.ParentCommentID) != icParentCmt {
-		t.Fatalf("parent = %s, want %s", uuidString(got.ParentCommentID), icParentCmt)
+	parent, err := r.parentComment(ctx, route.IssueID, queued)
+	if err != nil || uuidString(parent) != icParentCmt {
+		t.Fatalf("parent = %s, err=%v", uuidString(parent), err)
 	}
-	if got.Origin.MessageID != "om_inbound_1" || got.AuthorUserID != identity.UserID {
-		t.Fatalf("params = %+v", got)
-	}
-	mapped, err := f.store.GetChannelIssueMessageByChannelID(ctx, "om_inbound_1")
-	if err != nil || uuidString(mapped.CommentID) != icNewComment || mapped.Direction != issueMessageInbound {
-		t.Fatalf("mapping = %+v err=%v", mapped, err)
-	}
-
-	// A replay of the same event must not write a second comment.
 	if err := r.RecordIssueComment(ctx, inst, identity, route, msg); err != nil {
 		t.Fatalf("replay: %v", err)
 	}
-	if len(writer.calls) != 1 {
-		t.Fatalf("replay wrote another comment (calls = %d)", len(writer.calls))
+	var count int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM channel_issue_comment_pending WHERE channel_message_id = $1`, lm.MessageID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("queued messages = %d, err=%v", count, err)
 	}
 }
 
@@ -260,13 +261,10 @@ func TestIssueChatRouter_MentionFallsBackToBotName(t *testing.T) {
 			{Key: "@_user_2", Name: "Twin", UnionID: "on_unknown_twin"},
 		},
 	}
-	route := engine.IssueChatRoute{BindingID: f.binding.ID, WorkspaceID: f.binding.WorkspaceID, IssueID: f.binding.IssueID, StewardInstallationID: f.steward.ID}
-	if err := r.RecordIssueComment(ctx, engine.ResolvedInstallation{ID: f.steward.ID}, engine.ResolvedIdentity{UserID: uuidFromString(t, icMember)}, route, groupInbound(t, lm, "", "")); err != nil {
-		t.Fatalf("record: %v", err)
-	}
+	got, err := r.renderComment(ctx, f.binding.WorkspaceID, lm, flattenContent(lm.MessageType, lm.Content))
 	want := "[@Planner](mention://agent/" + plannerAgent + ") and @Twin go"
-	if len(writer.calls) != 1 || writer.calls[0].Content != want {
-		t.Fatalf("content = %+v, want %q", writer.calls, want)
+	if err != nil || got != want {
+		t.Fatalf("content = %q, err=%v, want %q", got, err, want)
 	}
 	if api.calls != 3 {
 		t.Fatalf("bot info calls = %d, want one per bot without a union_id", api.calls)

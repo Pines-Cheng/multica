@@ -697,7 +697,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				// mirrored back into the chat.
 				feishuSet.IssueToLeaderSquad = true
 				feishuSet.IssueProjectDirective = true
-				feishuSet.IssueChat = lark.NewFeishuIssueChatRouter(cs, h, larkClient, installSvc, slog.Default())
+				h.LarkIssueComments = lark.NewFeishuIssueChatRouter(cs, h, larkClient, installSvc, slog.Default())
+				h.LarkIssueComments.SetMediaResolver(mediaResolver)
+				feishuSet.IssueChat = h.LarkIssueComments
 				channelRouter.Register(channel.TypeFeishu, feishuSet)
 				chatAdmin, _ := larkClient.(lark.ChatAdmin)
 				issueChat := lark.NewIssueChatService(lark.IssueChatServiceConfig{

@@ -1,6 +1,6 @@
 # Issue ↔ 飞书群双向协作
 
-> 状态：P0、P1 已验收通过；P2 的 `/issue` 交给小组、运行进度卡片已实现，附件同步待定。
+> 状态：P0、P1 已验收通过；P2 的 `/issue` 交给小组、运行进度卡片、群消息附件入站已实现，附件出站待定。
 
 ## 1. 目标
 
@@ -148,19 +148,20 @@ if bound:
     if inst.ID != route.StewardInstallationID → 丢弃（issue_chat_non_steward）
     if 发送者是 Bot                            → 丢弃（issue_chat_bot_sender）
     identity := 解析发送者（含 union_id 兜底，§9）
-    body     := IssueChat.RenderComment(msg)    // 飞书消息 → Markdown
-    IssueComments.CreateFromChannel(...)
+    IssueChat.RecordIssueComment(...)           // 持久化待同步消息，随后返回飞书回执
     return
 ```
+
+`FeishuIssueChatRouter.Run` 在后台处理 `channel_issue_comment_pending`。同一绑定按消息顺序处理，不同绑定最多四个并行；媒体下载与上传最多等待 45 秒。进程重启后继续处理待同步消息，数据库等临时故障会重试。后台处理时重新检查安装状态、成员身份和任务归属。
 
 - **其它 Agent 的 Bot**也会收到 @它的事件，统一按 non_steward 丢弃。这样一条消息只会被处理一次，不需要跨 Bot 去重。
 - **mention 转换**：`mentions[].id.union_id` 命中本工作区某个飞书安装的 `bot_union_id` → `[@Agent](mention://agent/<id>)`；命中用户绑定 → `[@名字](mention://member/<user_id>)`；`@所有人` 和无法识别的 → 纯文本。对管家 Bot 自身的 @：如果管家就是 Leader，转换成 `@Leader` mention，等同于在 issue 里 @Leader。
 - **引用回复**：`parent_id` 命中 `channel_issue_message` → 作为 comment 的 `parent_id`（落入同一 comment 串）。
 - **话题内消息**：`root_id` 命中话题根 → 写入对应子 issue。
 - **未绑定的人**：沿用现有的绑定提示卡片；消息不写入 issue。
-- **附件/图片**：P0 写成占位文字 `[图片]`；P2 复用现有媒体入库链路。
+- **附件/图片**：复用飞书媒体下载、对象存储和上传意图清理链路。独立图片、文件和富文本内的媒体转成 Multica 附件，正文使用 `/api/attachments/{id}/download`；按消息结构保留图文位置，同一资源重复出现时复用附件。下载失败的位置保留 `[Attachment unavailable]`，其余文字与附件仍同步。音频、视频沿用同一媒体链路。
 
-**comment 写入的复用方式**：把 `handler.CreateComment` 中请求解析之后的主体抽成内部方法 `createMemberComment(ctx, params)`，HTTP 接口和飞书入站共用。这样权限检查、`triggerTasksForComment`（@mention 触发、Squad 路由、调用权限）、事件发布都只有一份实现。`Handler` 实现 `engine.IssueCommentWriter` 接口，通过启动时依赖注入传入（与现有的 `Lifecycle: h` 做法相同）。该方法在**同一事务内**写入 `channel_issue_message(direction=inbound)`，并在 `comment:created` 事件 payload 上带 `channel_origin`。
+**comment 写入的复用方式**：`Handler` 实现 `lark.IssueCommentWriter`，通过进程内请求复用 `handler.CreateComment`。评论、附件、上传意图认领、`channel_issue_message(direction=inbound)` 和队列确认在同一事务内提交；队列租约失效则回滚。提交后沿用普通评论的权限检查、`triggerTasksForComment` 和事件发布，因此 @智能体时附件已经可读。`comment:created` 带 `channel_origin`，避免把来源消息再镜像回群。只处理新增群消息，不补历史附件。
 
 ## 8. 出站：issue timeline → 群
 

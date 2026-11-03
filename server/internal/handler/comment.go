@@ -1829,7 +1829,8 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	}
 	var created db.CreateCommentRow
 	var err error
-	if len(attachmentIDs) > 0 {
+	channelComment, fromChannel := r.Context().Value(channelIssueCommentKey{}).(lark.ChannelIssueCommentParams)
+	if len(attachmentIDs) > 0 || fromChannel {
 		// A comment and the attachments it was posted with are one visible
 		// change, and one database outcome. Committing the comment first leaves
 		// a window in which it can gain a reply and be deleted into a
@@ -1857,7 +1858,7 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		defer tx.Rollback(r.Context())
 		qtx := h.Queries.WithTx(tx)
 		created, err = qtx.CreateComment(r.Context(), createParams)
-		if err == nil {
+		if err == nil && len(attachmentIDs) > 0 {
 			var missing pgtype.UUID
 			missing, err = lockCommentAttachments(r.Context(), qtx, issue.WorkspaceID, issue.ID, attachmentIDs)
 			if err == nil && missing.Valid {
@@ -1865,12 +1866,15 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if err == nil {
+		if err == nil && len(attachmentIDs) > 0 {
 			err = qtx.LinkAttachmentsToComment(r.Context(), db.LinkAttachmentsToCommentParams{
 				CommentID: created.ID,
 				IssueID:   issue.ID,
 				Column3:   attachmentIDs,
 			})
+		}
+		if err == nil && fromChannel {
+			err = bindChannelIssueComment(r.Context(), qtx, channelComment, &created)
 		}
 		if err == nil {
 			err = tx.Commit(r.Context())

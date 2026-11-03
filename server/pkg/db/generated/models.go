@@ -419,6 +419,20 @@ type ChannelIssueChat struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ChannelIssueCommentPending struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	IssueID          pgtype.UUID        `json:"issue_id"`
+	BindingID        pgtype.UUID        `json:"binding_id"`
+	InstallationID   pgtype.UUID        `json:"installation_id"`
+	AuthorUserID     pgtype.UUID        `json:"author_user_id"`
+	ChannelMessageID string             `json:"channel_message_id"`
+	Message          []byte             `json:"message"`
+	LeaseToken       pgtype.UUID        `json:"lease_token"`
+	LeaseExpiresAt   pgtype.Timestamptz `json:"lease_expires_at"`
+	NextAttemptAt    pgtype.Timestamptz `json:"next_attempt_at"`
+}
+
 type ChannelIssueMessage struct {
 	ID               pgtype.UUID        `json:"id"`
 	WorkspaceID      pgtype.UUID        `json:"workspace_id"`

@@ -480,6 +480,9 @@ deleted_channel_binding_tokens AS (
 deleted_channel_issue_messages AS (
     DELETE FROM channel_issue_message WHERE workspace_id = $1
 ),
+deleted_channel_issue_comment_pending AS (
+    DELETE FROM channel_issue_comment_pending WHERE workspace_id = $1
+),
 deleted_channel_issue_chats AS (
     DELETE FROM channel_issue_chat WHERE workspace_id = $1
 ),

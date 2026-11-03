@@ -23,6 +23,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/dbid"
 )
 
 const (
@@ -46,7 +47,9 @@ type CommentChannelOrigin struct {
 	MessageID      string `json:"message_id"`
 }
 
-// ChannelIssueCommentParams is a member comment written from a channel.
+// ChannelIssueCommentParams is a member comment written from a claimed inbound
+// queue entry. BindingID, LeaseToken and Origin identify that entry for the
+// writer's atomic source mapping and acknowledgement.
 type ChannelIssueCommentParams struct {
 	WorkspaceID     pgtype.UUID
 	IssueID         pgtype.UUID
@@ -54,6 +57,14 @@ type ChannelIssueCommentParams struct {
 	ParentCommentID pgtype.UUID
 	Content         string
 	Origin          CommentChannelOrigin
+	BindingID       pgtype.UUID
+	LeaseToken      pgtype.UUID
+	Attachments     []ChannelIssueCommentAttachment
+}
+
+type ChannelIssueCommentAttachment struct {
+	ID pgtype.UUID
+	channel.MediaRef
 }
 
 // IssueCommentWriter creates a member comment through the same path as the
@@ -75,6 +86,7 @@ type FeishuIssueChatRouter struct {
 	api    APIClient
 	creds  CredentialsResolver
 	logger *slog.Logger
+	media  engine.MediaResolver
 
 	namesMu sync.Mutex
 	names   map[pgtype.UUID]cachedBotName
@@ -101,6 +113,11 @@ func NewFeishuIssueChatRouter(store *ChannelStore, writer IssueCommentWriter, ap
 		store: store, writer: writer, api: api, creds: creds, logger: logger,
 		names: make(map[pgtype.UUID]cachedBotName),
 	}
+}
+
+// SetMediaResolver wires the existing Feishu resource downloader before Run.
+func (r *FeishuIssueChatRouter) SetMediaResolver(media engine.MediaResolver) {
+	r.media = media
 }
 
 // LookupIssueChat routes a message inside a topic by the topic's root
@@ -159,50 +176,10 @@ func (r *FeishuIssueChatRouter) RecordIssueComment(ctx context.Context, inst eng
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	lm, err := larkMsgFromRaw(msg)
-	if err != nil {
-		return err
-	}
-	body, err := r.renderComment(ctx, route.WorkspaceID, lm)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(body) == "" {
-		return nil
-	}
-	parent, err := r.parentComment(ctx, route.IssueID, lm)
-	if err != nil {
-		return err
-	}
-	commentID, err := r.writer.CreateChannelIssueComment(ctx, ChannelIssueCommentParams{
-		WorkspaceID:     route.WorkspaceID,
-		IssueID:         route.IssueID,
-		AuthorUserID:    identity.UserID,
-		ParentCommentID: parent,
-		Content:         body,
-		Origin: CommentChannelOrigin{
-			ChannelType:    channelTypeFeishu,
-			InstallationID: uuidString(inst.ID),
-			MessageID:      msg.MessageID,
-		},
-	})
-	if errors.Is(err, ErrIssueCommentRejected) {
-		r.logger.Info("lark issue chat: comment rejected",
-			"issue_id", uuidString(route.IssueID), "message_id", msg.MessageID, "error", err)
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	return r.store.RecordChannelIssueMessage(ctx, db.RecordChannelIssueMessageParams{
-		WorkspaceID:      route.WorkspaceID,
-		IssueID:          route.IssueID,
-		BindingID:        route.BindingID,
-		InstallationID:   inst.ID,
-		ChannelMessageID: msg.MessageID,
-		Direction:        issueMessageInbound,
-		Kind:             issueMessageKindComment,
-		CommentID:        commentID,
+	return r.store.QueueChannelIssueComment(ctx, db.QueueChannelIssueCommentParams{
+		ID: dbid.NewV7(), WorkspaceID: route.WorkspaceID, IssueID: route.IssueID,
+		BindingID: route.BindingID, InstallationID: inst.ID, AuthorUserID: identity.UserID,
+		ChannelMessageID: msg.MessageID, Message: msg.Raw,
 	})
 }
 
@@ -230,8 +207,7 @@ func (r *FeishuIssueChatRouter) parentComment(ctx context.Context, issueID pgtyp
 // renderComment turns the user's message into comment Markdown. Mentions are
 // resolved by union_id, the only identity consistent across the bots in one
 // chat: a bot becomes an agent mention, a bound person a member mention.
-func (r *FeishuIssueChatRouter) renderComment(ctx context.Context, workspaceID pgtype.UUID, lm InboundMessage) (string, error) {
-	text := flattenContent(lm.MessageType, lm.Content)
+func (r *FeishuIssueChatRouter) renderComment(ctx context.Context, workspaceID pgtype.UUID, lm InboundMessage, text string) (string, error) {
 	if (lm.MessageType != "text" && lm.MessageType != "post") || len(lm.Mentions) == 0 {
 		return text, nil
 	}

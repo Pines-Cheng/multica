@@ -26,6 +26,11 @@ func Marker(id string) string {
 
 // Block renders one channel attachment plus its durable provenance marker.
 func Block(id, filename string, image bool) string {
+	return Link(id, filename, image) + "\n\n" + Marker(id)
+}
+
+// Link renders media at its original position in a channel comment.
+func Link(id, filename string, image bool) string {
 	downloadPath := DownloadPath(id)
 	var markdown string
 	if image {
@@ -43,7 +48,7 @@ func Block(id, filename string, image bool) string {
 		}
 		markdown = "[" + label + "](" + downloadPath + ")"
 	}
-	return markdown + "\n\n" + Marker(id)
+	return markdown
 }
 
 // MarkedIDs returns valid channel-media attachment ids in document order,

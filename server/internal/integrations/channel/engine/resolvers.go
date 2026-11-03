@@ -331,9 +331,9 @@ type MediaResolver interface {
 	// plain ingest path: no marker, no deferred run, no semaphore slot.
 	HasMedia(msg channel.InboundMessage) bool
 	// ResolveMedia downloads the platform media and uploads it to object
-	// storage. chatMessageID is the durable chat_message that owns the pending
-	// intent; the Router decides whether the resulting refs belong to that
-	// message or to an issue created from the same turn.
+	// storage. chatMessageID correlates the upload intents: a durable chat_message
+	// for Chat ingestion, or a fresh attempt ID for an issue-group comment. The
+	// caller binds the returned refs to their destination in a transaction.
 	ResolveMedia(ctx context.Context, inst ResolvedInstallation, sender ResolvedIdentity, sessionID, chatMessageID pgtype.UUID, msg channel.InboundMessage) channel.InboundMessage
 }
 

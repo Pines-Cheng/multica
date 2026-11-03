@@ -159,7 +159,10 @@ func flattenPostContent(raw string) string {
 	if err != nil {
 		return ""
 	}
+	return flattenPostDocument(doc)
+}
 
+func flattenPostDocument(doc larkPostContent) string {
 	var b strings.Builder
 	write := func(line string) {
 		if b.Len() > 0 {

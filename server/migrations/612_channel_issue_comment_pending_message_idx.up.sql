@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS channel_issue_comment_pending_message_idx ON channel_issue_comment_pending (channel_message_id);
