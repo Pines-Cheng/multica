@@ -15,7 +15,7 @@ import (
 type ChatAdmin interface {
 	CreateChat(ctx context.Context, creds InstallationCredentials, p CreateChatParams) (ChatID, error)
 	AddChatMembers(ctx context.Context, creds InstallationCredentials, p AddChatMembersParams) (invalid []string, err error)
-	// AddChatURLTab pins a URL as a tab at the top of the chat.
+	// AddChatURLTab pins a URL as an in-app tab at the top of the chat.
 	AddChatURLTab(ctx context.Context, creds InstallationCredentials, chatID ChatID, name, url string) error
 	// PinTopNotice pins a message to the top of the chat.
 	PinTopNotice(ctx context.Context, creds InstallationCredentials, chatID ChatID, messageID string) error
@@ -146,6 +146,7 @@ func (c *httpAPIClient) AddChatURLTab(ctx context.Context, creds InstallationCre
 		"tab_name":    name,
 		"tab_type":    "url",
 		"tab_content": map[string]string{"url": tabURL},
+		"tab_config":  map[string]bool{"is_built_in": true},
 	}}}
 	var resp struct {
 		Code int    `json:"code"`
