@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 
@@ -17,76 +16,141 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
+	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-const progressHint = "群里的发言会同步为该任务的评论，任务的评论也会同步到群里。@ 某个 Agent 即可让它开始处理。"
+const progressHint = "群内发言与任务评论双向同步；@ 智能体可让它处理。"
 
-// progressMarkdown renders the progress card body for a root issue.
-func (s *IssueChatService) progressMarkdown(ctx context.Context, issue db.Issue) string {
-	var b strings.Builder
+// progressCardJSON uses the same current-state template for a chat's pinned
+// card and a sub-issue's topic root. Links only navigate; none has a callback.
+func (s *IssueChatService) progressCardJSON(ctx context.Context, issue db.Issue, rootIssueID pgtype.UUID, notes ...string) (string, error) {
 	identifier, link := s.issueIdentity(ctx, issue)
-	fmt.Fprintf(&b, "**%s %s**\n状态：%s", identifier, issue.Title, statusLabel(issue.Status))
-	if name := s.assigneeName(ctx, issue); name != "" {
-		fmt.Fprintf(&b, " · 负责人：%s", name)
+	topic := rootIssueID.Valid && rootIssueID != issue.ID
+	if topic {
+		root, err := s.cfg.Store.GetIssue(ctx, rootIssueID)
+		if err != nil {
+			return "", err
+		}
+		rootIdentifier, _ := s.issueIdentity(ctx, root)
+		path := []string{rootIdentifier}
+		if issue.ParentIssueID.Valid && issue.ParentIssueID != rootIssueID {
+			parent, err := s.cfg.Store.GetIssue(ctx, issue.ParentIssueID)
+			if err != nil {
+				return "", err
+			}
+			parentIdentifier, _ := s.issueIdentity(ctx, parent)
+			path = append(path, parentIdentifier)
+		}
+		identifier = strings.Join(append(path, identifier), " › ")
 	}
+	entries, err := s.cfg.Store.ListIssueStatusEntries(ctx, db.ListIssueStatusEntriesParams{WorkspaceID: issue.WorkspaceID, IncludeArchived: true})
+	if err != nil {
+		return "", err
+	}
+	catalog := make(map[string]db.IssueStatus, len(entries))
+	for _, entry := range entries {
+		catalog[entry.Key] = entry
+	}
+	label, template := issueCardStatus(issue.Status, catalog)
+	subtitle := []string{identifier, label}
+	if name := s.assigneeName(ctx, issue); name != "" {
+		subtitle = append(subtitle, name)
+	}
+	content := issueCardContent{
+		title: issue.Title, subtitle: strings.Join(subtitle, " · "),
+		summary: cardSummary("", label+" · "+strings.TrimSpace(identifier+" "+issue.Title)), template: template,
+		action: issueCardLink{label: "查看任务", url: link}, links: metadataCardLinks(issue.Metadata),
+	}
+	if issue.Status == issuestatus.InReview {
+		content.action.label = "查看交付"
+	} else if issue.Status == issuestatus.Done {
+		content.action.label = "查看结果"
+	}
+	if topic {
+		content.footnotes = append(content.footnotes, "本话题内的发言会同步为该子任务的评论。")
+	} else {
+		content.footnotes = append(content.footnotes, progressHint)
+	}
+	updatedAt := issue.UpdatedAt.Time
 	children, err := s.cfg.Store.ListChildIssues(ctx, issue.ID)
 	if err != nil {
-		s.cfg.Logger.Warn("lark issue chat: list sub-issues for progress failed", "issue_id", uuidString(issue.ID), "error", err)
-	}
-	if now := s.progressNow(ctx, issue, children); now != "" {
-		b.WriteString("\n当前：" + now)
+		return "", err
 	}
 	if len(children) > 0 {
-		b.WriteString("\n\n**子任务**")
+		lines := []string{"**子任务进度**"}
+		var current []string
 		for _, c := range children {
-			fmt.Fprintf(&b, "\n- %s · %s", statusLabel(c.Status), childLabel(c))
-			if name := s.assigneeName(ctx, c); name != "" {
-				b.WriteString(" · " + name)
+			child := childLabel(c)
+			if _, childURL := s.issueIdentity(ctx, c); validIssueCardURL(childURL) {
+				child = issueCardMarkdownLink(issueCardLink{label: child, url: childURL})
+			}
+			childStatus, _ := issueCardStatus(c.Status, catalog)
+			line := "- " + child + " · " + childStatus
+			name := s.assigneeName(ctx, c)
+			if name != "" {
+				line += " · " + name
+			}
+			if c.Status == issuestatus.Todo || issueCardCategory(c.Status, catalog) == issuestatus.CategoryStarted {
+				activity := childLabel(c) + " · " + childStatus
+				if name != "" {
+					activity = name + " · " + activity
+					if c.AssigneeType.String == "member" && (c.Status == issuestatus.Todo || c.Status == issuestatus.InReview) {
+						activity = "待 " + name + " 处理 \"" + childLabel(c) + "\" · " + childStatus
+					}
+				}
+				current = append(current, activity)
+			}
+			lines = append(lines, line)
+			if c.UpdatedAt.Time.After(updatedAt) {
+				updatedAt = c.UpdatedAt.Time
 			}
 		}
+		category := issueCardCategory(issue.Status, catalog)
+		if len(current) > 0 && category != issuestatus.CategoryDone && category != issuestatus.CategoryClosed && issue.Status != issuestatus.Blocked {
+			content.sections = append(content.sections, "当前："+strings.Join(current, "；"))
+		} else if issue.Status == issuestatus.InReview {
+			content.sections = append(content.sections, "当前：待验收")
+		}
+		content.sections = append(content.sections, strings.Join(lines, "\n"))
 	}
-	if links := metadataLinks(issue.Metadata); links != "" {
-		b.WriteString("\n\n**链接**\n" + links)
+	if issue.Status == issuestatus.InReview && len(children) == 0 {
+		content.sections = append(content.sections, "当前：待验收")
 	}
-	if link != "" {
-		fmt.Fprintf(&b, "\n\n[查看任务详情](%s)", link)
+	if !updatedAt.IsZero() {
+		content.footnotes = append(content.footnotes, "更新于 "+updatedAt.UTC().Format("01-02 15:04 MST"))
 	}
-	return b.String()
+	content.sections = append(content.sections, notes...)
+	return marshalIssueCard(content)
 }
 
-// progressNow says what the work is waiting on.
-func (s *IssueChatService) progressNow(ctx context.Context, issue db.Issue, children []db.Issue) string {
-	switch issue.Status {
-	case "done", "cancelled":
-		return "已结束"
-	case "blocked":
-		return "已阻塞"
+func issueCardStatus(key string, catalog map[string]db.IssueStatus) (label, template string) {
+	label = statusLabel(key)
+	if !issuestatus.IsBuiltIn(key) && catalog[key].Name != "" {
+		label = catalog[key].Name
 	}
-	var active []string
-	for _, c := range children {
-		if c.Status != "todo" && c.Status != "in_progress" && c.Status != "blocked" {
-			continue
-		}
-		who := s.assigneeName(ctx, c)
-		switch {
-		case c.AssigneeType.String == "member" && who != "":
-			active = append(active, "待 "+who+" 处理「"+childLabel(c)+"」")
-		case who != "":
-			active = append(active, who+" 处理中「"+childLabel(c)+"」")
-		default:
-			active = append(active, "「"+childLabel(c)+"」"+statusLabel(c.Status))
-		}
+	category := issueCardCategory(key, catalog)
+	switch {
+	case key == issuestatus.Blocked:
+		return label, "red"
+	case key == issuestatus.InReview:
+		return label, "orange"
+	case category == issuestatus.CategoryDone:
+		return label, "green"
+	case category == issuestatus.CategoryStarted:
+		return label, "blue"
+	default:
+		return label, "grey"
 	}
-	if len(active) > 0 {
-		return strings.Join(active, "；")
+}
+
+func issueCardCategory(key string, catalog map[string]db.IssueStatus) string {
+	if category, builtin := issuestatus.CategoryForBehavior(key); builtin {
+		return category
 	}
-	if issue.Status == "in_review" {
-		return "待验收"
-	}
-	return ""
+	return catalog[key].Category
 }
 
 // childLabel names a sub-issue by its stage: titles follow "<stage>：<root
@@ -99,27 +163,26 @@ func childLabel(c db.Issue) string {
 	return oneLine(title, 40)
 }
 
-// metadataLinks lists the issue's metadata entries whose value is a web
+// metadataCardLinks lists the issue's metadata entries whose value is a web
 // link, so an agent can surface Meego, PRD, MR and test links on the card by
 // setting issue metadata.
-func metadataLinks(raw []byte) string {
+func metadataCardLinks(raw []byte) []issueCardLink {
 	var meta map[string]any
 	if len(raw) == 0 || json.Unmarshal(raw, &meta) != nil {
-		return ""
+		return nil
 	}
 	keys := make([]string, 0, len(meta))
 	for k, v := range meta {
-		if u, ok := v.(string); ok && (strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "http://")) && !strings.ContainsAny(u, " \n)") {
+		if u, ok := v.(string); ok && strings.TrimSpace(k) != "" && validIssueCardURL(u) {
 			keys = append(keys, k)
 		}
 	}
 	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
+	links := make([]issueCardLink, 0, len(keys))
 	for _, k := range keys {
-		label := strings.NewReplacer("[", "", "]", "").Replace(k)
-		parts = append(parts, fmt.Sprintf("[%s](%s)", label, meta[k].(string)))
+		links = append(links, issueCardLink{label: k, url: meta[k].(string)})
 	}
-	return strings.Join(parts, " · ")
+	return links
 }
 
 func (s *IssueChatService) issueIdentity(ctx context.Context, issue db.Issue) (identifier, link string) {
@@ -131,8 +194,7 @@ func (s *IssueChatService) issueIdentity(ctx context.Context, issue db.Issue) (i
 	return identifier, channel.IssueWebLink(s.cfg.AppURL, ws.Slug, identifier)
 }
 
-// refreshProgress re-renders the progress card of the chat issueID belongs
-// to (its own, or its root issue's for a sub-issue topic).
+// refreshProgress updates a topic's own card and its root chat's overview.
 func (s *IssueChatService) refreshProgress(ctx context.Context, issueID pgtype.UUID) error {
 	binding, err := s.cfg.Store.GetChannelIssueChatByIssue(ctx, db.GetChannelIssueChatByIssueParams{IssueID: issueID, ChannelType: channelTypeFeishu})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -141,20 +203,36 @@ func (s *IssueChatService) refreshProgress(ctx context.Context, issueID pgtype.U
 	if err != nil {
 		return err
 	}
+	if binding.Status != "active" {
+		return nil
+	}
+	var topicErr error
 	if binding.RootIssueID != binding.IssueID {
+		topicErr = s.refreshBoundIssueCard(ctx, binding)
 		binding, err = s.cfg.Store.GetChannelIssueChatByIssue(ctx, db.GetChannelIssueChatByIssueParams{IssueID: binding.RootIssueID, ChannelType: channelTypeFeishu})
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
+			return topicErr
 		}
 		if err != nil {
-			return err
+			return errors.Join(topicErr, err)
 		}
 	}
+	return errors.Join(topicErr, s.refreshBoundIssueCard(ctx, binding))
+}
+
+func (s *IssueChatService) refreshBoundIssueCard(ctx context.Context, binding db.ChannelIssueChat) error {
 	if binding.Status != "active" {
 		return nil
 	}
 	defer s.lock("progress:" + uuidString(binding.ID))()
-	card, err := s.cfg.Store.GetChannelIssueIntroMessage(ctx, binding.ID)
+	topic := binding.RootIssueID != binding.IssueID
+	var card db.ChannelIssueMessage
+	var err error
+	if topic {
+		card, err = s.cfg.Store.GetChannelIssueMessageByChannelID(ctx, binding.ThreadRootMessageID)
+	} else {
+		card, err = s.cfg.Store.GetChannelIssueIntroMessage(ctx, binding.ID)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -173,7 +251,7 @@ func (s *IssueChatService) refreshProgress(ctx context.Context, issueID pgtype.U
 	if err != nil {
 		return err
 	}
-	cardJSON, err := issueChatCardJSON("", "", s.progressMarkdown(ctx, issue)+"\n\n"+progressHint)
+	cardJSON, err := s.progressCardJSON(ctx, issue, binding.RootIssueID)
 	if err != nil {
 		return err
 	}

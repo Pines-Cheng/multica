@@ -128,7 +128,7 @@ Multica 是唯一事实源和执行方；botmux 只作交互参考，不参与�
 **子 issue（存在已绑定的祖先）**
 
 1. 找到最近的已绑定祖先所在的群。
-2. 管家在群主消息流发一张"子任务卡片"（`MUL-12 › MUL-15 标题 · 负责人 · 链接`），其 `message_id` 作为话题根。
+2. 管家在群主消息流发一张子任务卡片：保留完整标题，副标题展示父子任务编号路径、状态和负责人，其 `message_id` 作为话题根。
 3. 写入绑定：`chat_id` = 祖先群，`thread_root_message_id` = 话题根，`root_issue_id` = 根 issue。
 4. 子 issue 的负责 Agent/成员不在群里时补拉入群。
 
@@ -167,10 +167,12 @@ if bound:
 | `comment:created`（来自飞书） | **不发**（payload 带 `channel_origin`） | — |
 | `comment:updated` | 更新原卡片 | 原发送者 |
 | `comment:deleted` | 原卡片改为"该评论已删除" | 原发送者 |
-| `issue:created` / `issue:updated` / `issue_metadata:changed` | 不发新消息，原地刷新根群置顶的**进度卡**（群里的第一张卡片）：状态、负责人、当前在等谁、子任务列表（状态 · 阶段 · 负责人）、issue metadata 里的链接（Meego、需求文档、MR、PPE 验证等）、查看任务详情 | 管家（发出进度卡的 Bot） |
+| `issue:created` / `issue:updated` / `issue_metadata:changed` | 状态、负责人、标题或资料链接变化时，原地刷新根群置顶的进度卡；子任务同时刷新自己的话题首卡，不发新消息。展示实际状态、负责人、子任务进度和 metadata 中已有的资料链接 | 每张卡片的原发送 Bot，管家交接不改变旧卡的更新身份 |
 | `issue:created` 子 issue（P1） | 按 §6 开话题 | 管家 |
 | `task:*` Agent 运行进度（P2） | 运行超过 20 秒才发卡片（Leader 分派这类短运行不打扰）；无标题，显示状态、已运行时长和最近 2 条动作（只显示动作类别，如「运行命令」「修改文件」，不暴露参数），最多每 3 秒刷新；运行写了评论时卡片被评论接管（见上）；没写评论则结束时只留一行「已完成 · 用时」，失败时显示原因；已写过评论的运行不再开卡片；附「查看详情」链接 | 该 Agent 的 Bot |
 
+- **展示模板**：进度卡和话题首卡使用完整标题、副标题、当前处理人、进度列表、主按钮、资料链接和辅助说明分区。子任务列表简写阶段名，话题首卡保留完整标题和父任务编号，便于独立查看。状态颜色来自内置状态或自定义状态的生命周期分类；自定义状态展示其实际名称，不推断其具有内置评审行为。
+- **链接操作**：主按钮只声明 `open_url`，打开现有任务页面；`in_review` 显示"查看交付"，`done` 显示"查看结果"。提醒卡提供定位到原评论的"查看讨论"入口。没有有效地址时省略入口，不生成体验地址或自测报告，不新增卡片回调、直接验收或认证检查。
 - **路由**：comment 所属 issue 有绑定 → 发到群主消息流，或用 `reply_in_thread` 回复到话题根。Web 上对某条 comment 的回复 → 引用回复它对应的那条飞书消息。
 - **mention 渲染**：mention 了已绑定飞书的成员时，用发送 Bot 视角下的身份（该 Bot 下的绑定 open_id）生成原生 `<at id=…>`，成员会收到飞书提醒；用户在该 Bot 下没有绑定时退化为粗体名字；mention Agent 一律渲染为粗体名字，不用 `<at>` 去 @Bot，避免对方 Bot 收到事件。
 - **防回环三道闸**：① `channel_origin` 跳过回发；② 入站丢弃 `sender_type=app`；③ `channel_issue_message.channel_message_id` 唯一。
@@ -259,8 +261,8 @@ if bound:
 |---|---|
 | Squad 开关 | 迁移 `602`（`squad.auto_create_channel_chat`，默认开启）；`PATCH` 小组接口字段同名；小组详情页「自动建飞书群」开关 |
 | 自动建群 | `lark/issue_chat_activity.go`：`issue:created` / `issue:updated`（指派变更）/ `comment:created`（@Squad）触发 `autoCreate` |
-| 子 issue 话题 | `EnsureChat` 发现已绑定的祖先时调用 `openTopic`：管家发根卡片，子 issue 绑定到该卡片；子 issue 的评论和状态通知都回复到话题里 |
-| 状态 / 指派通知 | `syncIssueChange` → `postActivity` |
+| 子 issue 话题 | `EnsureChat` 发现已绑定的祖先时调用 `openTopic`：管家发根卡片，子 issue 绑定到该卡片；子 issue 的评论回复到话题里 |
+| 状态 / 指派 / 标题 / 资料更新 | `refreshProgress` → `refreshBoundIssueCard`，同时刷新子任务话题首卡和根群进度卡 |
 | 成员补拉 | 指派变更和开话题时调用 `inviteParticipants` |
 | 管家交接 | 指派变更时 `handover`（旧管家先拉新 Bot 入群）；管家 Bot 断开时 `currentSteward` 改用根 issue 当前的管家 |
 

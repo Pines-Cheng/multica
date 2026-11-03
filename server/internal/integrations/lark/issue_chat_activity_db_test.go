@@ -188,8 +188,8 @@ func TestIssueChatP1_SubIssueBecomesTopicAndThreadsItsTimeline(t *testing.T) {
 		t.Fatal("a sub-issue must not open a chat of its own")
 	}
 
-	// A status change shows on the root chat's pinned progress card instead
-	// of posting a notice.
+	// A status change updates the root overview and topic card instead of
+	// posting a notice.
 	sentBefore := len(f.api.sent)
 	f.fx.Exec(t, `UPDATE issue SET status = 'in_progress' WHERE id = $1`, child)
 	f.publishIssue(protocol.EventIssueUpdated, child, map[string]any{"status_changed": true, "prev_status": "todo"})
@@ -197,14 +197,14 @@ func TestIssueChatP1_SubIssueBecomesTopicAndThreadsItsTimeline(t *testing.T) {
 		t.Fatalf("a status change posted a notice: %+v", f.api.sent[sentBefore:])
 	}
 	progress := f.progressCard(t, parent)
-	if !strings.Contains(progress, "进行中 · Child · Leader") || !strings.Contains(progress, "Leader 处理中「Child」") {
+	if !strings.Contains(progress, "Child · 进行中 · Leader") {
 		t.Fatalf("progress card does not show the sub-issue's state: %s", progress)
 	}
 
-	f.fx.Exec(t, `UPDATE issue SET metadata = '{"Meego":"https://meego.example/story/1","note":"plain"}' WHERE id = $1`, parent)
+	f.fx.Exec(t, `UPDATE issue SET metadata = '{"Meego":"https://meego.example/story/1","note":"not-a-document-link"}' WHERE id = $1`, parent)
 	f.bus.Publish(events.Event{Type: protocol.EventIssueMetadataChanged, WorkspaceID: f.ws, Payload: map[string]any{"issue_id": parent}})
 	progress = f.progressCard(t, parent)
-	if !strings.Contains(progress, "[Meego](https://meego.example/story/1)") || strings.Contains(progress, "plain") {
+	if !strings.Contains(progress, "[Meego](https://meego.example/story/1)") || strings.Contains(progress, "not-a-document-link") {
 		t.Fatalf("progress card links = %s", progress)
 	}
 }
@@ -237,6 +237,191 @@ func (f *activityFixture) progressCard(t *testing.T, rootIssue string) string {
 	return ""
 }
 
+func TestIssueChatCards_RefreshesTopicWithItsOriginalSender(t *testing.T) {
+	f := newActivityFixture(t)
+	f.svc.cfg.AppURL = "https://multica.example"
+	parent := f.fx.Issue(t, "Parent", testutil.Cols{"assignee_type": "squad", "assignee_id": f.squad})
+	f.publishIssue(protocol.EventIssueCreated, parent, nil)
+	child := f.fx.Issue(t, "开发：Parent", testutil.Cols{"parent_issue_id": parent, "assignee_type": "agent", "assignee_id": f.leader})
+	f.publishIssue(protocol.EventIssueCreated, child, nil)
+	topic, ok := f.binding(t, child)
+	if !ok {
+		t.Fatal("child topic missing")
+	}
+
+	other := f.fx.Agent(t, "New steward", f.fx.Runtime(t, "new-steward-runtime"))
+	f.installBot(t, other, "cli_card_new_steward")
+	f.fx.Exec(t, `UPDATE issue SET assignee_type = 'agent', assignee_id = $2 WHERE id = $1`, parent, other)
+	f.publishIssue(protocol.EventIssueUpdated, parent, map[string]any{"assignee_changed": true})
+	sentBefore := len(f.api.sent)
+
+	for _, status := range []string{"in_progress", "done", "cancelled"} {
+		f.fx.Exec(t, `UPDATE issue SET status = $2, assignee_type = 'member', assignee_id = $3 WHERE id = $1`, child, status, f.user)
+		f.publishIssue(protocol.EventIssueUpdated, child, map[string]any{"status_changed": true, "assignee_changed": true})
+		var latest PatchCardParams
+		for _, patch := range f.api.patched {
+			if patch.LarkCardMessageID == topic.ThreadRootMessageID {
+				latest = patch
+			}
+		}
+		if latest.LarkCardMessageID == "" {
+			t.Fatal("status change did not refresh the child topic card")
+		}
+		card := unescapeCardJSON(t, latest.CardJSON)
+		if latest.InstallationID.AppID != f.steward.AppID || !strings.Contains(card, statusLabel(status)) || !strings.Contains(card, "Chat Owner") {
+			t.Fatalf("topic update must show %s and its assignee through the original bot: %+v card=%s", status, latest, card)
+		}
+		if progress := f.progressCard(t, parent); !strings.Contains(progress, statusLabel(status)) {
+			t.Fatalf("parent progress does not reflect child status %s: %s", status, progress)
+		}
+	}
+	if len(f.api.sent) != sentBefore {
+		t.Fatal("refreshing topic cards must not post new messages")
+	}
+}
+
+func TestIssueChatCards_RefreshesTopicTitleAndLinks(t *testing.T) {
+	f := newActivityFixture(t)
+	f.svc.cfg.AppURL = "https://multica.example"
+	parent := f.fx.Issue(t, "Parent", testutil.Cols{"assignee_type": "squad", "assignee_id": f.squad})
+	f.publishIssue(protocol.EventIssueCreated, parent, nil)
+	child := f.fx.Issue(t, "开发：Parent", testutil.Cols{"parent_issue_id": parent})
+	f.publishIssue(protocol.EventIssueCreated, child, nil)
+	topic, ok := f.binding(t, child)
+	if !ok {
+		t.Fatal("child topic missing")
+	}
+	sentBefore := len(f.api.sent)
+	f.fx.Exec(t, `UPDATE issue SET title = '自测：Parent' WHERE id = $1`, child)
+	f.publishIssue(protocol.EventIssueUpdated, child, map[string]any{"title_changed": true})
+	f.fx.Exec(t, `UPDATE issue SET metadata = '{"自测报告":"https://tests.example/report","note":"internal"}' WHERE id = $1`, child)
+	f.bus.Publish(events.Event{Type: protocol.EventIssueMetadataChanged, WorkspaceID: f.ws, Payload: map[string]any{"issue_id": child}})
+	var latest PatchCardParams
+	for _, patch := range f.api.patched {
+		if patch.LarkCardMessageID == topic.ThreadRootMessageID {
+			latest = patch
+		}
+	}
+	card := decodeIssueCard(t, latest.CardJSON)
+	if card.Header.Title.Content != "自测：Parent" || !strings.Contains(latest.CardJSON, "https://tests.example/report") || strings.Contains(latest.CardJSON, "internal") {
+		t.Fatalf("topic content did not refresh from the issue: %s", latest.CardJSON)
+	}
+	if !strings.Contains(f.progressCard(t, parent), "自测") {
+		t.Fatal("parent overview did not pick up the renamed child")
+	}
+	if len(f.api.sent) != sentBefore {
+		t.Fatal("title and metadata updates must not post new messages")
+	}
+}
+
+func TestIssueChatCards_KeepsStandaloneIdentityAndPendingOwner(t *testing.T) {
+	f := newActivityFixture(t)
+	f.svc.cfg.AppURL = "https://multica.example"
+	parent := f.fx.Issue(t, "项目空间添加搜索功能", testutil.Cols{"assignee_type": "squad", "assignee_id": f.squad})
+	f.publishIssue(protocol.EventIssueCreated, parent, nil)
+	const title = "验收：项目空间添加搜索功能"
+	child := f.fx.Issue(t, title, testutil.Cols{"parent_issue_id": parent, "assignee_type": "member", "assignee_id": f.user})
+	f.publishIssue(protocol.EventIssueCreated, child, nil)
+	topic, ok := f.binding(t, child)
+	if !ok {
+		t.Fatal("child topic missing")
+	}
+	rootIssue, err := f.store.GetIssue(context.Background(), uuidFromString(t, parent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	childIssue, err := f.store.GetIssue(context.Background(), uuidFromString(t, child))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootIdentifier, _ := f.svc.issueIdentity(context.Background(), rootIssue)
+	childIdentifier, _ := f.svc.issueIdentity(context.Background(), childIssue)
+	var card decodedIssueCard
+	for _, patch := range f.api.patched {
+		if patch.LarkCardMessageID == topic.ThreadRootMessageID {
+			card = decodeIssueCard(t, patch.CardJSON)
+		}
+	}
+	if card.Header.Title.Content != title || !strings.Contains(card.Header.Subtitle.Content, rootIdentifier+" › "+childIdentifier) {
+		t.Fatalf("topic card must keep its full title and parent identity when viewed alone: %+v", card.Header)
+	}
+	if progress := f.progressCard(t, parent); !strings.Contains(progress, "待 Chat Owner 处理") {
+		t.Fatalf("overview must make the pending member action visible: %s", progress)
+	}
+	grandchild := f.fx.Issue(t, "回归：项目空间添加搜索功能", testutil.Cols{"parent_issue_id": child})
+	f.publishIssue(protocol.EventIssueCreated, grandchild, nil)
+	grandTopic, ok := f.binding(t, grandchild)
+	if !ok {
+		t.Fatal("nested topic missing")
+	}
+	grandIssue, err := f.store.GetIssue(context.Background(), uuidFromString(t, grandchild))
+	if err != nil {
+		t.Fatal(err)
+	}
+	grandIdentifier, _ := f.svc.issueIdentity(context.Background(), grandIssue)
+	for _, patch := range f.api.patched {
+		if patch.LarkCardMessageID == grandTopic.ThreadRootMessageID {
+			card = decodeIssueCard(t, patch.CardJSON)
+		}
+	}
+	if !strings.Contains(card.Header.Subtitle.Content, rootIdentifier+" › "+childIdentifier+" › "+grandIdentifier) {
+		t.Fatalf("nested topic must keep its immediate parent as well as the root: %+v", card.Header)
+	}
+	f.fx.Exec(t, `UPDATE issue SET status = 'done' WHERE id = $1`, child)
+	f.publishIssue(protocol.EventIssueUpdated, child, map[string]any{"status_changed": true})
+	f.fx.Exec(t, `UPDATE issue SET status = 'in_review' WHERE id = $1`, parent)
+	f.publishIssue(protocol.EventIssueUpdated, parent, map[string]any{"status_changed": true})
+	if progress := f.progressCard(t, parent); !strings.Contains(progress, "当前：待验收") {
+		t.Fatalf("delivery after the children finish must retain the review prompt: %s", progress)
+	}
+}
+
+func TestIssueChatCards_DeliveryAndAttentionOnlyLinkToExistingPages(t *testing.T) {
+	f := newActivityFixture(t)
+	f.svc.cfg.AppURL = "https://multica.example"
+	issueID := f.fx.Issue(t, "Ready to review", testutil.Cols{
+		"status": "in_review", "assignee_type": "squad", "assignee_id": f.squad,
+		"metadata": `{"体验地址":"https://preview.example/search","自测报告":"https://tests.example/report"}`,
+	})
+	f.publishIssue(protocol.EventIssueCreated, issueID, nil)
+	issue, err := f.store.GetIssue(context.Background(), uuidFromString(t, issueID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, issueURL := f.svc.issueIdentity(context.Background(), issue)
+	cardJSON := f.api.patched[len(f.api.patched)-1].CardJSON
+	delivery := decodeIssueCard(t, cardJSON)
+	if delivery.Header.Template != "orange" || !strings.Contains(cardJSON, "https://preview.example/search") || !strings.Contains(cardJSON, "https://tests.example/report") {
+		t.Fatalf("delivery card must show saved status and links: %s", cardJSON)
+	}
+	for _, element := range delivery.Body.Elements {
+		if element.Tag == "button" && (element.Text.Content != "查看交付" || len(element.Behaviors) != 1 || element.Behaviors[0].Type != "open_url" || element.Behaviors[0].DefaultURL != issueURL) {
+			t.Fatalf("delivery action must open the existing issue: %+v", element)
+		}
+	}
+	commentID := f.fx.Insert(t, "comment", testutil.Cols{
+		"issue_id": issueID, "workspace_id": f.ws, "author_type": "agent", "author_id": f.leader,
+		"content": "[@Owner](mention://member/" + f.user + ") please review", "type": "comment",
+	})
+	f.bus.Publish(events.Event{Type: protocol.EventCommentCreated, WorkspaceID: f.ws, Payload: map[string]any{"comment": map[string]any{
+		"id": commentID, "issue_id": issueID, "author_type": "agent", "author_id": f.leader,
+		"content": "[@Owner](mention://member/" + f.user + ") please review", "type": "comment",
+	}}})
+	attention := decodeIssueCard(t, f.api.sent[len(f.api.sent)-1].CardJSON)
+	buttons := 0
+	for _, element := range attention.Body.Elements {
+		if element.Tag == "button" {
+			buttons++
+			if element.Text.Content != "查看讨论" || len(element.Behaviors) != 1 || element.Behaviors[0].Type != "open_url" || element.Behaviors[0].DefaultURL != issueURL+"#comment-"+commentID {
+				t.Fatalf("attention action must open the original discussion: %+v", element)
+			}
+		}
+	}
+	if buttons != 1 || attention.Header.Template != "orange" {
+		t.Fatalf("attention card missing its navigation action: %+v", attention)
+	}
+}
+
 func TestIssueChatP1_ReassignmentHandsTheChatToTheNewSteward(t *testing.T) {
 	f := newActivityFixture(t)
 	issue := f.fx.Issue(t, "Handover", testutil.Cols{"assignee_type": "squad", "assignee_id": f.squad})
@@ -260,7 +445,7 @@ func TestIssueChatP1_ReassignmentHandsTheChatToTheNewSteward(t *testing.T) {
 	if !invited {
 		t.Fatalf("the new steward's bot was not invited: %+v", f.chats.added)
 	}
-	if progress := f.progressCard(t, issue); !strings.Contains(progress, "负责人：Other") {
+	if progress := f.progressCard(t, issue); !strings.Contains(progress, " · Other") {
 		t.Fatalf("progress card does not show the new assignee: %s", progress)
 	}
 }

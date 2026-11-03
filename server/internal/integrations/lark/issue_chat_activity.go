@@ -66,12 +66,13 @@ func issueChangeFromEvent(e events.Event) (issueChange, bool) {
 	c := issueChange{created: e.Type == protocol.EventIssueCreated, issueID: id}
 	c.statusChanged, _ = payload["status_changed"].(bool)
 	c.assigneeChanged, _ = payload["assignee_changed"].(bool)
+	titleChanged, _ := payload["title_changed"].(bool)
 	if e.ActorType == "member" {
 		if actor, err := util.ParseUUID(e.ActorID); err == nil {
 			c.actorMember = actor
 		}
 	}
-	return c, c.created || c.statusChanged || c.assigneeChanged
+	return c, c.created || c.statusChanged || c.assigneeChanged || titleChanged
 }
 
 func (s *IssueChatService) handleIssueEvent(e events.Event) {

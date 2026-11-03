@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -175,7 +174,7 @@ func (s *IssueChatService) EnsureChat(ctx context.Context, p EnsureIssueChatPara
 	if ancestor, ok, err := s.ancestorChat(ctx, issue); err != nil {
 		return IssueChat{}, err
 	} else if ok {
-		return s.openTopic(ctx, ancestor, issue, ws.IssuePrefix, identifier, issueLink, p.ActorUserID)
+		return s.openTopic(ctx, ancestor, issue, p.ActorUserID)
 	}
 
 	plan, err := s.planChat(ctx, issue, p.SquadID, p.ActorUserID)
@@ -259,7 +258,7 @@ func (s *IssueChatService) ancestorChat(ctx context.Context, issue db.Issue) (db
 // openTopic binds a sub-issue to a topic in its ancestor's chat: the steward
 // posts a root card, and the sub-issue's timeline threads under it. Its
 // participants are added to the chat when missing.
-func (s *IssueChatService) openTopic(ctx context.Context, ancestor db.ChannelIssueChat, issue db.Issue, prefix, identifier, issueLink string, actor pgtype.UUID) (IssueChat, error) {
+func (s *IssueChatService) openTopic(ctx context.Context, ancestor db.ChannelIssueChat, issue db.Issue, actor pgtype.UUID) (IssueChat, error) {
 	steward, err := s.cfg.Store.GetLarkInstallation(ctx, ancestor.StewardInstallationID)
 	if err != nil {
 		return IssueChat{}, err
@@ -268,20 +267,7 @@ func (s *IssueChatService) openTopic(ctx context.Context, ancestor db.ChannelIss
 	if err != nil {
 		return IssueChat{}, err
 	}
-	path := identifier
-	if root, err := s.cfg.Store.GetIssue(ctx, ancestor.IssueID); err == nil {
-		path = service.IssueIdentifier(prefix, root.Number) + " › " + identifier
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "**子任务 %s %s**\n状态：%s", path, issue.Title, statusLabel(issue.Status))
-	if name := s.assigneeName(ctx, issue); name != "" {
-		fmt.Fprintf(&b, " · 负责人：%s", name)
-	}
-	if issueLink != "" {
-		fmt.Fprintf(&b, "\n[查看任务详情](%s)", issueLink)
-	}
-	b.WriteString("\n\n在本话题内的发言会同步为该子任务的评论。")
-	card, err := issueChatCardJSON("", "", b.String())
+	card, err := s.progressCardJSON(ctx, issue, ancestor.RootIssueID)
 	if err != nil {
 		return IssueChat{}, err
 	}
@@ -594,11 +580,11 @@ func uniqueUUIDs(ids []pgtype.UUID) []pgtype.UUID {
 // sendIntro posts the chat's opening card, which then serves as its progress
 // card, and pins it to the top of the chat.
 func (s *IssueChatService) sendIntro(ctx context.Context, creds InstallationCredentials, row db.ChannelIssueChat, issue db.Issue, plan chatPlan) {
-	body := s.progressMarkdown(ctx, issue) + "\n\n" + progressHint
+	var notes []string
 	if len(plan.uninvited) > 0 {
-		body += "\n\n以下成员尚未绑定飞书，未能拉入群：" + strings.Join(plan.uninvited, "、")
+		notes = append(notes, "以下成员尚未绑定飞书，未能拉入群："+strings.Join(plan.uninvited, "、"))
 	}
-	card, err := issueChatCardJSON("", "", body)
+	card, err := s.progressCardJSON(ctx, issue, row.RootIssueID, notes...)
 	if err == nil {
 		var msgID string
 		msgID, err = s.cfg.API.SendInteractiveCard(ctx, SendCardParams{InstallationID: creds, ChatID: ChatID(row.ChatID), CardJSON: card})
@@ -921,7 +907,19 @@ func (s *IssueChatService) patchMirrors(ctx context.Context, binding db.ChannelI
 func (s *IssueChatService) commentCardJSON(ctx context.Context, workspaceID pgtype.UUID, sender Installation, relayLabel string, c commentEvent) (string, error) {
 	body := s.commentMarkdown(ctx, workspaceID, sender, c.Content)
 	if who := attentionNames(c); who != "" {
-		return issueChatCardJSONWithTemplate("待 "+who+" 处理", relayLabel, body, "orange")
+		content := issueCardContent{
+			title: "待 " + who + " 处理", subtitle: relayLabel,
+			summary: cardSummary("待 "+who+" 处理", body), template: "orange", sections: []string{body},
+		}
+		if validIssueCardURL(s.cfg.AppURL) {
+			if id, err := util.ParseUUID(c.IssueID); err == nil {
+				if issue, err := s.cfg.Store.GetIssue(ctx, id); err == nil {
+					_, link := s.issueIdentity(ctx, issue)
+					content.action = issueCardLink{label: "查看讨论", url: link + "#comment-" + c.ID}
+				}
+			}
+		}
+		return marshalIssueCard(content)
 	}
 	if relayLabel != "" {
 		return issueChatCardJSON(relayLabel, "来自 Multica", body)
