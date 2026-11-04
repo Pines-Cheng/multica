@@ -217,6 +217,7 @@ type LarkMessage struct {
 	MessageType           string // Lark `msg_type`: text / post / image / merge_forward / …
 	Content               string // raw body.content (a JSON-encoded string)
 	SenderID              string // sender.id (open_id for users, app_id for apps)
+	SenderName            string // server-provided display name, when available
 	SenderType            string // sender.sender_type: user / app / anonymous / …
 	CreateTime            string // epoch milliseconds, as Lark returns it (a string)
 	ParentID              string

@@ -170,6 +170,10 @@ type InboundMessage struct {
 	// binding only attaches refs whose ledger intent it can claim.
 	MediaRefs []MediaRef
 
+	// MediaErrors contains safe, user-visible failure reasons keyed by the
+	// attempted storage key. Adapters use it to render partial sync failures.
+	MediaErrors map[string]string
+
 	// ReplyTo is the quoted/replied-to context, or nil.
 	ReplyTo *ReplyCtx
 

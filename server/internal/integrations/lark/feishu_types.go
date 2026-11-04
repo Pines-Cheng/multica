@@ -27,6 +27,10 @@ type InboundMessage struct {
 	// ingestion keeps it so the adapter can extract image_key/file_key before
 	// translating to channel.InboundMessage.
 	Content string
+	// ResourceMessageID is the outer forward containing this child. Feishu's
+	// resource endpoint accepts that visible container, not the child's ID.
+	// MessageID remains the child identity for storage and transcript placement.
+	ResourceMessageID string
 	// ForceFreshSession marks this dispatch as a one-off fresh start: the
 	// daemon should skip prior session resume when it claims the resulting
 	// chat task.

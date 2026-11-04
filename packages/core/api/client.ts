@@ -1702,6 +1702,12 @@ export class ApiClient {
     });
   }
 
+  async retryChannelMessageSync(messageId: string): Promise<void> {
+    await this.fetch<void>(`/api/channel-messages/${encodeURIComponent(messageId)}/retry`, {
+      method: "POST",
+    });
+  }
+
   async createComment(
     issueId: string,
     content: string,

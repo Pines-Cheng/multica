@@ -1,4 +1,10 @@
 {
+  "channel_sync": {
+    "forwarded": "Messages transférés",
+    "retry": "Réessayer la synchronisation",
+    "syncing": "Synchronisation...",
+    "failed": "Synchronisation impossible. Vérifiez vos accès et si le commentaire a été modifié, puis réessayez."
+  },
   "bubble_menu": {
     "bold": "Gras",
     "italic": "Italique",

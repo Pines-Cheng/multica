@@ -1,4 +1,10 @@
 {
+  "channel_sync": {
+    "forwarded": "转发的会话记录",
+    "retry": "重试同步",
+    "syncing": "同步中...",
+    "failed": "无法同步。请检查访问权限及评论是否被编辑，然后重试。"
+  },
   "bubble_menu": {
     "bold": "加粗",
     "italic": "斜体",

@@ -79,36 +79,8 @@ func (h *Handler) CreateChannelIssueComment(ctx context.Context, p lark.ChannelI
 // bindChannelIssueComment commits attachments, the source-message mapping and
 // queue acknowledgement with the comment, before events or agent triggers run.
 func bindChannelIssueComment(ctx context.Context, q *db.Queries, p lark.ChannelIssueCommentParams, created *db.CreateCommentRow) error {
-	keys := make([]string, 0, len(p.Attachments))
-	for _, attachment := range p.Attachments {
-		keys = append(keys, attachment.StorageKey)
-	}
-	if len(keys) > 0 {
-		claimed, err := q.ClaimChannelMediaPendingObjectsForBind(ctx, db.ClaimChannelMediaPendingObjectsForBindParams{
-			StorageKeys: keys, WorkspaceID: p.WorkspaceID,
-		})
-		if err != nil {
-			return err
-		}
-		if len(claimed) != len(keys) {
-			return errors.New("channel comment media is no longer available")
-		}
-	}
-	for _, attachment := range p.Attachments {
-		contentType := attachment.MimeType
-		if contentType == "" {
-			contentType = "application/octet-stream"
-		}
-		row, err := q.CreateAttachment(ctx, db.CreateAttachmentParams{
-			ID: attachment.ID, WorkspaceID: p.WorkspaceID, IssueID: p.IssueID, CommentID: created.ID,
-			UploaderType: "member", UploaderID: p.AuthorUserID, Filename: attachment.Filename,
-			Url: attachment.StorageURL, ContentType: contentType, SizeBytes: attachment.SizeBytes,
-		})
-		if err != nil {
-			return err
-		}
-		created.Revision = row.CommentRevision
-		created.IssueRevision = row.IssueRevision
+	if err := bindChannelIssueAttachments(ctx, q, p, created); err != nil {
+		return err
 	}
 	if err := q.RecordChannelIssueMessage(ctx, db.RecordChannelIssueMessageParams{
 		WorkspaceID: p.WorkspaceID, IssueID: p.IssueID, BindingID: p.BindingID,
@@ -116,6 +88,13 @@ func bindChannelIssueComment(ctx context.Context, q *db.Queries, p lark.ChannelI
 		Direction: "inbound", Kind: "comment", CommentID: created.ID,
 	}); err != nil {
 		return err
+	}
+	if len(p.SyncState) > 0 {
+		if err := q.SetChannelIssueMessageSyncState(ctx, db.SetChannelIssueMessageSyncStateParams{
+			ChannelMessageID: p.Origin.MessageID, WorkspaceID: p.WorkspaceID, SyncState: p.SyncState,
+		}); err != nil {
+			return err
+		}
 	}
 	count, err := q.FinishChannelIssueComment(ctx, db.FinishChannelIssueCommentParams{
 		ChannelMessageID: p.Origin.MessageID, WorkspaceID: p.WorkspaceID, LeaseToken: p.LeaseToken,
@@ -219,4 +198,39 @@ func (h *Handler) CreateIssueChannelChat(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, IssueChannelChatResponse{Available: true, Chat: issueChannelChatEntry(chat)})
+}
+
+func bindChannelIssueAttachments(ctx context.Context, q *db.Queries, p lark.ChannelIssueCommentParams, created *db.CreateCommentRow) error {
+	keys := make([]string, 0, len(p.Attachments))
+	for _, attachment := range p.Attachments {
+		keys = append(keys, attachment.StorageKey)
+	}
+	if len(keys) > 0 {
+		claimed, err := q.ClaimChannelMediaPendingObjectsForBind(ctx, db.ClaimChannelMediaPendingObjectsForBindParams{
+			StorageKeys: keys, WorkspaceID: p.WorkspaceID,
+		})
+		if err != nil {
+			return err
+		}
+		if len(claimed) != len(keys) {
+			return errors.New("channel comment media is no longer available")
+		}
+	}
+	for _, attachment := range p.Attachments {
+		contentType := attachment.MimeType
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		row, err := q.CreateAttachment(ctx, db.CreateAttachmentParams{
+			ID: attachment.ID, WorkspaceID: p.WorkspaceID, IssueID: p.IssueID, CommentID: created.ID,
+			UploaderType: "member", UploaderID: p.AuthorUserID, Filename: attachment.Filename,
+			Url: attachment.StorageURL, ContentType: contentType, SizeBytes: attachment.SizeBytes,
+		})
+		if err != nil {
+			return err
+		}
+		created.Revision = row.CommentRevision
+		created.IssueRevision = row.IssueRevision
+	}
+	return nil
 }

@@ -60,6 +60,7 @@ type ChannelIssueCommentParams struct {
 	BindingID       pgtype.UUID
 	LeaseToken      pgtype.UUID
 	Attachments     []ChannelIssueCommentAttachment
+	SyncState       []byte
 }
 
 type ChannelIssueCommentAttachment struct {

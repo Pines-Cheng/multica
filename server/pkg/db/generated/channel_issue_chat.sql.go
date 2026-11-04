@@ -239,7 +239,7 @@ func (q *Queries) GetChannelIssueChatByRoute(ctx context.Context, arg GetChannel
 }
 
 const getChannelIssueIntroMessage = `-- name: GetChannelIssueIntroMessage :one
-SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at, task_id FROM channel_issue_message
+SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at, task_id, sync_state FROM channel_issue_message
 WHERE binding_id = $1 AND kind = 'intro'
 ORDER BY created_at ASC
 LIMIT 1
@@ -261,12 +261,13 @@ func (q *Queries) GetChannelIssueIntroMessage(ctx context.Context, bindingID pgt
 		&i.CommentID,
 		&i.CreatedAt,
 		&i.TaskID,
+		&i.SyncState,
 	)
 	return i, err
 }
 
 const getChannelIssueMessageByChannelID = `-- name: GetChannelIssueMessageByChannelID :one
-SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at, task_id FROM channel_issue_message
+SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at, task_id, sync_state FROM channel_issue_message
 WHERE channel_message_id = $1
 `
 
@@ -285,12 +286,13 @@ func (q *Queries) GetChannelIssueMessageByChannelID(ctx context.Context, channel
 		&i.CommentID,
 		&i.CreatedAt,
 		&i.TaskID,
+		&i.SyncState,
 	)
 	return i, err
 }
 
 const getChannelIssueMessageByTask = `-- name: GetChannelIssueMessageByTask :one
-SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at, task_id FROM channel_issue_message
+SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at, task_id, sync_state FROM channel_issue_message
 WHERE task_id = $1 AND kind = 'task'
 ORDER BY created_at ASC
 LIMIT 1
@@ -312,6 +314,7 @@ func (q *Queries) GetChannelIssueMessageByTask(ctx context.Context, taskID pgtyp
 		&i.CommentID,
 		&i.CreatedAt,
 		&i.TaskID,
+		&i.SyncState,
 	)
 	return i, err
 }
@@ -354,7 +357,7 @@ func (q *Queries) GetLatestCommentBySourceTask(ctx context.Context, sourceTaskID
 }
 
 const listChannelIssueMessagesByComment = `-- name: ListChannelIssueMessagesByComment :many
-SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at, task_id FROM channel_issue_message
+SELECT id, workspace_id, issue_id, binding_id, installation_id, channel_message_id, direction, kind, comment_id, created_at, task_id, sync_state FROM channel_issue_message
 WHERE comment_id = $1
 ORDER BY created_at ASC
 `
@@ -383,6 +386,7 @@ func (q *Queries) ListChannelIssueMessagesByComment(ctx context.Context, comment
 			&i.CommentID,
 			&i.CreatedAt,
 			&i.TaskID,
+			&i.SyncState,
 		); err != nil {
 			return nil, err
 		}

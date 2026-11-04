@@ -72,6 +72,12 @@ func (r *feishuMediaResolver) ResolveMedia(ctx context.Context, inst engine.Reso
 	if len(resources) == 0 {
 		return msg
 	}
+	fail := func(key, reason string) {
+		if msg.MediaErrors == nil {
+			msg.MediaErrors = make(map[string]string)
+		}
+		msg.MediaErrors[key] = reason
+	}
 	if r.api == nil || r.creds == nil || r.storage == nil || r.ledger == nil {
 		r.logMediaWarn("lark media ingest skipped: missing dependency", lm, nil)
 		return msg
@@ -103,20 +109,27 @@ func (r *feishuMediaResolver) ResolveMedia(ctx context.Context, inst engine.Reso
 		if err != nil {
 			// No durable intent, no upload — fail-safe direction.
 			r.logMediaWarn("lark media ingest skipped: intent record failed", lm, err)
+			fail(key, "Could not prepare attachment storage")
 			continue
 		}
 		if !ok {
 			// The reconciler owns this key ('deleting'); never resurrect it.
 			r.logMediaWarn("lark media ingest skipped: key owned by reconciler", lm, nil)
+			fail(key, "Attachment storage is being cleaned up; retry sync")
 			continue
 		}
+		resourceMessageID := res.messageID
+		if lm.ResourceMessageID != "" {
+			resourceMessageID = lm.ResourceMessageID
+		}
 		got, err := r.downloadResource(ctx, creds, DownloadResourceParams{
-			MessageID: res.messageID,
+			MessageID: resourceMessageID,
 			FileKey:   res.key,
 			Type:      res.fetchType,
 		})
 		if err != nil {
 			r.logMediaWarn("lark media download failed", lm, err)
+			fail(key, "Could not download attachment from Feishu: "+syncReadFailureReason(err))
 			continue
 		}
 		contentType := mediaContentType(res, got)
@@ -127,6 +140,7 @@ func (r *feishuMediaResolver) ResolveMedia(ctx context.Context, inst engine.Reso
 			// could reorder with it. The intent row (written above) covers
 			// the object either way; the reconciler settles it.
 			r.logMediaWarn("lark media upload failed", lm, err)
+			fail(key, "Could not save attachment")
 			continue
 		}
 		sizeBytes := got.SizeBytes

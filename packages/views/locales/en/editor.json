@@ -1,4 +1,10 @@
 {
+  "channel_sync": {
+    "forwarded": "Forwarded messages",
+    "retry": "Retry sync",
+    "syncing": "Syncing...",
+    "failed": "Could not sync. Check your access and whether the comment was edited, then retry."
+  },
   "bubble_menu": {
     "bold": "Bold",
     "italic": "Italic",

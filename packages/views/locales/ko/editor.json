@@ -1,4 +1,10 @@
 {
+  "channel_sync": {
+    "forwarded": "전달된 대화",
+    "retry": "동기화 다시 시도",
+    "syncing": "동기화 중...",
+    "failed": "동기화할 수 없습니다. 접근 권한과 댓글 수정 여부를 확인한 후 다시 시도하세요."
+  },
   "bubble_menu": {
     "bold": "굵게",
     "italic": "기울임",

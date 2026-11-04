@@ -2288,6 +2288,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Delete("/api/attachments/{id}", h.DeleteAttachment)
 
 			// Comments
+			r.With(handler.RequireHumanActor).Post("/api/channel-messages/{messageID}/retry", h.RetryChannelMessageSync)
 			r.Route("/api/comments/{commentId}", func(r chi.Router) {
 				r.With(handler.RequireHumanActor).Get("/sub-issue-preview", h.PreviewCommentSubIssue)
 				r.With(handler.RequireHumanActor).Post("/sub-issues", h.CreateCommentSubIssue)

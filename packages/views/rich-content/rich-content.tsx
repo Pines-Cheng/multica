@@ -85,6 +85,7 @@ import { getTextContent } from "./rich-table-model";
 import "katex/dist/katex.min.css";
 import "../editor/styles/index.css";
 import "./rich-content.css";
+import { ChannelSyncRetry, ForwardedSummary, channelSyncMessageId } from "./channel-sync-retry";
 
 export type RichContentDensity = "compact" | "document";
 export type RichContentPhase = "streaming" | "settled";
@@ -246,6 +247,9 @@ function RichLink({ href, children }: { href?: string; children?: ReactNode }) {
   // (web), modified clicks are left to the browser — the only way to get a
   // real background tab.
   const desktopTabs = !!useOptionalNavigation()?.openInNewTab;
+
+  const syncMessageId = channelSyncMessageId(href);
+  if (syncMessageId) return <ChannelSyncRetry messageId={syncMessageId} />;
 
   if (href?.startsWith("slash://skill/")) {
     return <span className="slash-command">{children}</span>;
@@ -472,6 +476,9 @@ function RichPre({ children }: RichPreProps) {
 // app and react-markdown can bail out of unchanged subtrees.
 const COMPONENTS: Partial<Components> = {
   a: RichLink,
+  summary: ({ children }) => childrenToLabel(children) === "Forwarded messages"
+    ? <ForwardedSummary />
+    : <summary>{children}</summary>,
 
   // Images — unified through <Attachment>. The resolver context provided by
   // AttachmentDownloadProvider turns a CDN URL into a full record when

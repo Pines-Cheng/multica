@@ -35,7 +35,7 @@ func TestHTTPClient_GetMessageSingle(t *testing.T) {
 						"message_position": "12", "thread_message_position": "3",
 						"msg_type":    "text",
 						"create_time": "1000",
-						"sender":      map[string]any{"id": "ou_a", "id_type": "open_id", "sender_type": "user"},
+						"sender":      map[string]any{"id": "ou_a", "id_type": "open_id", "sender_type": "user", "sender_name": "Alice"},
 						"body":        map[string]any{"content": `{"text":"hi"}`},
 						"mentions":    []any{map[string]any{"key": "@_user_1", "id": "ou_b", "name": "Bob"}},
 					},
@@ -59,7 +59,7 @@ func TestHTTPClient_GetMessageSingle(t *testing.T) {
 	if m.MessagePosition != "12" || m.ThreadMessagePosition != "3" {
 		t.Errorf("message position was lost: %+v", m)
 	}
-	if m.SenderID != "ou_a" || m.SenderType != "user" {
+	if m.SenderID != "ou_a" || m.SenderType != "user" || m.SenderName != "Alice" {
 		t.Errorf("sender = id:%q type:%q", m.SenderID, m.SenderType)
 	}
 	if len(m.Mentions) != 1 || m.Mentions[0].Key != "@_user_1" || m.Mentions[0].ID != "ou_b" || m.Mentions[0].Name != "Bob" {

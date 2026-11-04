@@ -1,4 +1,10 @@
 {
+  "channel_sync": {
+    "forwarded": "轉發的會話記錄",
+    "retry": "重試同步",
+    "syncing": "同步中...",
+    "failed": "無法同步。請檢查存取權限及留言是否被編輯，然後重試。"
+  },
   "bubble_menu": {
     "bold": "加粗",
     "italic": "斜體",

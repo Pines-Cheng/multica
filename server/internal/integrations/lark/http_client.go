@@ -1158,6 +1158,7 @@ type larkRESTMessageItem struct {
 		ID         string `json:"id"`
 		IDType     string `json:"id_type"`
 		SenderType string `json:"sender_type"`
+		SenderName string `json:"sender_name"`
 	} `json:"sender"`
 	Body struct {
 		Content string `json:"content"`
@@ -1177,6 +1178,7 @@ func (it larkRESTMessageItem) normalize() LarkMessage {
 		MessageType:           it.MsgType,
 		Content:               it.Body.Content,
 		SenderID:              it.Sender.ID,
+		SenderName:            it.Sender.SenderName,
 		SenderType:            it.Sender.SenderType,
 		CreateTime:            it.CreateTime,
 		ParentID:              it.ParentID,

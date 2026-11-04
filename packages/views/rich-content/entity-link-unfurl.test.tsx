@@ -194,3 +194,19 @@ describe("bare entity URLs in readonly content", () => {
     expect(container.querySelector("a")).not.toBeNull();
   });
 });
+
+
+describe("forwarded conversation rendering", () => {
+  it("keeps the transcript inside expandable nested records", () => {
+    const { container, getByText } = renderContent(
+      "<details>\n<summary>Forwarded messages</summary>\n\n**Alice · 2026-11-04T09:39:00Z**\n\n> Before attachment\n>\n> [report.pdf](/api/attachments/8f14e45f-ceea-4d0e-a1a2-9b1c0d3e4f5a/download)\n\n<details>\n<summary>Forwarded messages</summary>\n\n**Bob**\n\n> Nested reply\n\n</details>\n\n</details>",
+    );
+    const outer = container.querySelector("details")!;
+    expect(outer).not.toHaveAttribute("open");
+    expect(outer.querySelectorAll("details")).toHaveLength(1);
+    expect(outer.querySelectorAll("blockquote")).toHaveLength(2);
+    expect(outer).toContainElement(getByText("Before attachment"));
+    expect(outer).toContainElement(getByText("Nested reply"));
+    expect(outer.querySelector('a[href^="/api/attachments/"]')).toHaveTextContent("report.pdf");
+  });
+});

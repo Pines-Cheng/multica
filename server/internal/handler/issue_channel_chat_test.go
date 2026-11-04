@@ -113,8 +113,9 @@ func TestCreateChannelIssueCommentCommitsMediaAndSourceAtomically(t *testing.T) 
 			commentID, err := h.CreateChannelIssueComment(context.Background(), lark.ChannelIssueCommentParams{
 				WorkspaceID: parseUUID(testWorkspaceID), IssueID: parseUUID(issueID), AuthorUserID: parseUUID(testUserID),
 				BindingID: bindingID, LeaseToken: leaseToken,
-				Content: fmt.Sprintf("[@Target](mention://agent/%s) ![](/api/attachments/%s/download)", agentID, uuidToString(attachmentID)),
-				Origin:  lark.CommentChannelOrigin{ChannelType: "feishu", InstallationID: uuidToString(installationID), MessageID: messageID},
+				SyncState: []byte(`{"Incomplete":true}`),
+				Content:   fmt.Sprintf("[@Target](mention://agent/%s) ![](/api/attachments/%s/download)", agentID, uuidToString(attachmentID)),
+				Origin:    lark.CommentChannelOrigin{ChannelType: "feishu", InstallationID: uuidToString(installationID), MessageID: messageID},
 				Attachments: []lark.ChannelIssueCommentAttachment{{ID: attachmentID, MediaRef: channel.MediaRef{
 					Type: channel.MsgTypeImage, StorageKey: key, StorageURL: url, Filename: "shot.png", MimeType: "image/png", SizeBytes: 12,
 				}}},
@@ -151,6 +152,9 @@ func TestCreateChannelIssueCommentCommitsMediaAndSourceAtomically(t *testing.T) 
 			}
 			if n := dbfx.Count(t, `SELECT count(*) FROM channel_issue_message WHERE channel_message_id = $1 AND comment_id = $2`, messageID, commentID); n != 1 {
 				t.Fatalf("source mapping count = %d", n)
+			}
+			if n := dbfx.Count(t, `SELECT count(*) FROM channel_issue_message WHERE channel_message_id = $1 AND sync_state ->> 'Incomplete' = 'true'`, messageID); n != 1 {
+				t.Fatalf("sync state was not committed with comment: count=%d", n)
 			}
 			if n := dbfx.Count(t, `SELECT count(*) FROM channel_issue_comment_pending WHERE channel_message_id = $1`, messageID); n != 0 {
 				t.Fatalf("pending messages after commit = %d", n)

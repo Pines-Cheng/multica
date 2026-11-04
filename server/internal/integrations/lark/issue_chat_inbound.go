@@ -112,6 +112,23 @@ func (r *FeishuIssueChatRouter) processIssueComment(ctx context.Context, job db.
 		return err
 	}
 	resolvedInst := engine.ResolvedInstallation{ID: inst.ID, WorkspaceID: job.WorkspaceID, Platform: inst}
+	if lm.MessageType == larkMsgTypeMergeForward {
+		forward, err := r.PrepareForwardedComment(ctx, resolvedInst, lm, nil)
+		if err != nil {
+			return err
+		}
+		parent, err := r.parentComment(ctx, job.IssueID, lm)
+		if err != nil {
+			return err
+		}
+		_, err = r.writer.CreateChannelIssueComment(ctx, ChannelIssueCommentParams{
+			WorkspaceID: job.WorkspaceID, IssueID: job.IssueID, AuthorUserID: job.AuthorUserID,
+			ParentCommentID: parent, Content: forward.Content, BindingID: job.BindingID, LeaseToken: job.LeaseToken,
+			Attachments: forward.Attachments, SyncState: forward.SyncState,
+			Origin: CommentChannelOrigin{ChannelType: channelTypeFeishu, InstallationID: uuidString(inst.ID), MessageID: job.ChannelMessageID},
+		})
+		return err
+	}
 	msg := channelMessageFromLark(lm)
 	// A fresh correlation ID keeps retried uploads independent of abandoned
 	// intents already owned by the existing media reconciler.
