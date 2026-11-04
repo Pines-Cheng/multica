@@ -191,6 +191,15 @@ func issueCardMarkdownLink(link issueCardLink) string {
 	return fmt.Sprintf("[%s](%s)", label, url)
 }
 
+// Task titles remain plain text when displayed in the Markdown card body.
+func issueCardMarkdownText(value string) string {
+	return html.EscapeString(strings.NewReplacer(
+		"\\", "\\\\", "`", "\\`", "*", "\\*", "_", "\\_", "~", "\\~",
+		"[", "\\[", "]", "\\]", "#", "\\#", "!", "\\!", "|", "\\|",
+		"-", "\\-", "+", "\\+", ".", "\\.",
+	).Replace(value))
+}
+
 // cardSummary is the one-line preview Lark shows in the chat list.
 func cardSummary(title, markdown string) string {
 	line := strings.TrimSpace(markdown)

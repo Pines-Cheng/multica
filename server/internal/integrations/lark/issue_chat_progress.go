@@ -24,6 +24,8 @@ import (
 
 const progressHint = "群内发言与任务评论双向同步；@ 智能体可让它处理。"
 
+const progressOverviewTitle = "任务进展与产物"
+
 // progressCardJSON uses the same current-state template for a chat's pinned
 // card and a sub-issue's topic root. Links only navigate; none has a callback.
 func (s *IssueChatService) progressCardJSON(ctx context.Context, issue db.Issue, rootIssueID pgtype.UUID, notes ...string) (string, error) {
@@ -64,12 +66,17 @@ func (s *IssueChatService) progressCardJSON(ctx context.Context, issue db.Issue,
 		summary: cardSummary("", label+" · "+strings.TrimSpace(identifier+" "+issue.Title)), template: template,
 		action: issueCardLink{label: "查看任务", url: link}, links: metadataCardLinks(issue.Metadata),
 	}
+	needsAssistance := false
 	if !topic {
+		content.title = progressOverviewTitle
+		content.subtitle = strings.Join(subtitle[1:], " · ")
+		content.sections = append(content.sections, issueCardMarkdownText(issue.Title))
 		summary, err := s.assistanceSummary(ctx, issue)
 		if err != nil {
 			return "", err
 		}
 		if summary != "" {
+			needsAssistance = true
 			content.sections = append(content.sections, summary)
 		}
 	}
@@ -88,14 +95,17 @@ func (s *IssueChatService) progressCardJSON(ctx context.Context, issue db.Issue,
 	if err != nil {
 		return "", err
 	}
+	var current, blocked []string
 	if len(children) > 0 {
-		var current []string
 		for _, c := range children {
 			child := childLabel(c)
 			if _, childURL := s.issueIdentity(ctx, c); validIssueCardURL(childURL) {
 				child = issueCardMarkdownLink(issueCardLink{label: child, url: childURL})
 			}
 			childStatus, _ := issueCardStatus(c.Status, catalog)
+			if c.Status == issuestatus.Blocked {
+				blocked = append(blocked, childLabel(c)+" · "+childStatus)
+			}
 			name := s.assigneeName(ctx, c)
 			content.progress = append(content.progress, issueCardProgress{title: child, status: childStatus, assignee: name})
 			if c.Status == issuestatus.Todo || issueCardCategory(c.Status, catalog) == issuestatus.CategoryStarted {
@@ -112,15 +122,30 @@ func (s *IssueChatService) progressCardJSON(ctx context.Context, issue db.Issue,
 				updatedAt = c.UpdatedAt.Time
 			}
 		}
-		category := issueCardCategory(issue.Status, catalog)
-		if len(current) > 0 && category != issuestatus.CategoryDone && category != issuestatus.CategoryClosed && issue.Status != issuestatus.Blocked {
-			content.sections = append(content.sections, "当前："+strings.Join(current, "；"))
-		} else if issue.Status == issuestatus.InReview {
-			content.sections = append(content.sections, "当前：待验收")
-		}
 	}
-	if issue.Status == issuestatus.InReview && len(children) == 0 {
+	category := issueCardCategory(issue.Status, catalog)
+	if issue.Status == issuestatus.InReview {
 		content.sections = append(content.sections, "当前：待验收")
+	} else if issue.Status == issuestatus.Blocked {
+		content.sections = append(content.sections, "当前："+label)
+	} else if len(current) > 0 && category != issuestatus.CategoryDone && category != issuestatus.CategoryClosed {
+		content.sections = append(content.sections, "当前："+strings.Join(current, "；"))
+	}
+	if !topic {
+		state := label
+		if issue.Status == issuestatus.InReview {
+			state = "待验收"
+		} else if issue.Status != issuestatus.Blocked && category != issuestatus.CategoryDone && category != issuestatus.CategoryClosed {
+			if len(blocked) > 0 {
+				state = strings.Join(blocked, "；")
+			} else if len(current) > 0 {
+				state = strings.Join(current, "；")
+			}
+		}
+		if needsAssistance {
+			state = "待协助 · " + state
+		}
+		content.summary = cardSummary("", progressOverviewTitle+"｜"+state)
 	}
 	if !updatedAt.IsZero() {
 		content.footnotes = append(content.footnotes, "更新于 "+updatedAt.UTC().Format("01-02 15:04 MST"))

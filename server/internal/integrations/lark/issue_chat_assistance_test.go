@@ -56,6 +56,9 @@ func TestIssueChatAssistance_CloseRefreshesBothCardsWithoutNewMessages(t *testin
 		t.Fatalf("request card = %+v", card.Header)
 	}
 	progress := f.progressCard(t, root)
+	if !strings.Contains(progress, "任务进展与产物｜待协助") {
+		t.Fatalf("pinned preview must surface open assistance: %s", progress)
+	}
 	if !strings.Contains(progress, "待协助") || !strings.Contains(progress, "Bits login") || !strings.Contains(progress, "/client/thread/open?") || !strings.Contains(progress, "thread_position=3") {
 		t.Fatalf("root card must expose the request and native topic link: %s", progress)
 	}
