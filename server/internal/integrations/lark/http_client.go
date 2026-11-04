@@ -1144,15 +1144,17 @@ func (c *httpAPIClient) BatchGetUsers(ctx context.Context, creds InstallationCre
 // ways the enricher cares about: msg_type (not message_type), and a
 // flat `sender.id` / `mentions[].id` string (not a nested id object).
 type larkRESTMessageItem struct {
-	MessageID      string `json:"message_id"`
-	RootID         string `json:"root_id"`
-	ParentID       string `json:"parent_id"`
-	ThreadID       string `json:"thread_id"`
-	UpperMessageID string `json:"upper_message_id"`
-	MsgType        string `json:"msg_type"`
-	CreateTime     string `json:"create_time"`
-	Deleted        bool   `json:"deleted"`
-	Sender         struct {
+	MessagePosition       string `json:"message_position"`
+	ThreadMessagePosition string `json:"thread_message_position"`
+	MessageID             string `json:"message_id"`
+	RootID                string `json:"root_id"`
+	ParentID              string `json:"parent_id"`
+	ThreadID              string `json:"thread_id"`
+	UpperMessageID        string `json:"upper_message_id"`
+	MsgType               string `json:"msg_type"`
+	CreateTime            string `json:"create_time"`
+	Deleted               bool   `json:"deleted"`
+	Sender                struct {
 		ID         string `json:"id"`
 		IDType     string `json:"id_type"`
 		SenderType string `json:"sender_type"`
@@ -1169,17 +1171,19 @@ type larkRESTMessageItem struct {
 
 func (it larkRESTMessageItem) normalize() LarkMessage {
 	m := LarkMessage{
-		MessageID:      it.MessageID,
-		MessageType:    it.MsgType,
-		Content:        it.Body.Content,
-		SenderID:       it.Sender.ID,
-		SenderType:     it.Sender.SenderType,
-		CreateTime:     it.CreateTime,
-		ParentID:       it.ParentID,
-		RootID:         it.RootID,
-		ThreadID:       it.ThreadID,
-		UpperMessageID: it.UpperMessageID,
-		Deleted:        it.Deleted,
+		MessagePosition:       it.MessagePosition,
+		ThreadMessagePosition: it.ThreadMessagePosition,
+		MessageID:             it.MessageID,
+		MessageType:           it.MsgType,
+		Content:               it.Body.Content,
+		SenderID:              it.Sender.ID,
+		SenderType:            it.Sender.SenderType,
+		CreateTime:            it.CreateTime,
+		ParentID:              it.ParentID,
+		RootID:                it.RootID,
+		ThreadID:              it.ThreadID,
+		UpperMessageID:        it.UpperMessageID,
+		Deleted:               it.Deleted,
 	}
 	for _, mn := range it.Mentions {
 		m.Mentions = append(m.Mentions, LarkMessageMention{Key: mn.Key, ID: mn.ID, Name: mn.Name})

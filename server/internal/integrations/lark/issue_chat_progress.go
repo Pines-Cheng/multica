@@ -64,6 +64,15 @@ func (s *IssueChatService) progressCardJSON(ctx context.Context, issue db.Issue,
 		summary: cardSummary("", label+" · "+strings.TrimSpace(identifier+" "+issue.Title)), template: template,
 		action: issueCardLink{label: "查看任务", url: link}, links: metadataCardLinks(issue.Metadata),
 	}
+	if !topic {
+		summary, err := s.assistanceSummary(ctx, issue)
+		if err != nil {
+			return "", err
+		}
+		if summary != "" {
+			content.sections = append(content.sections, summary)
+		}
+	}
 	if issue.Status == issuestatus.InReview {
 		content.action.label = "查看交付"
 	} else if issue.Status == issuestatus.Done {

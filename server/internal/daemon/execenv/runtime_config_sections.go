@@ -779,6 +779,7 @@ func writeMentions(b *strings.Builder) {
 	// (Elon's review catch on #7245). The cost asymmetry line is what breaks
 	// the ambiguous middle.
 	b.WriteString("A mention pulls someone into work they are not doing yet: escalate to a human owner, hand another agent a concrete new sub-task, loop someone in because the user asked. It is not needed merely to notify — followers of the issue already see your comment, and completion notifications are platform-owned. Nor is it how a name is written — crediting a decision or citing someone's earlier point is prose about them, not work for them; the link form dispatches whoever it names, so a reference stays plain text. A thank-you / sign-off / FYI mention of another agent enqueues a paid run whose only possible reply is another courtesy; a missed mention costs one follow-up ask, a stray one costs a run. Silence ends conversations.\n\n")
+	b.WriteString("When you need a person to act (authenticate, authorize, supply information, or confirm a result), post an explicit assistance request with `multica issue comment add <issue-id> --request-assistance` and a real member mention. Ordinary @mentions are not assistance requests. Keep the required --parent when replying. After verifying the action succeeded, close the request with `multica issue comment assistance-close <comment-id>`; use `assistance-reopen` only when help is explicitly needed again. Replies and task status changes do not close or reopen assistance.\n")
 }
 
 // writeAttachments emits the Attachments pointer.

@@ -655,7 +655,14 @@
     "recipient_count_other": "에이전트 {{count}}개가 받습니다",
     "steer_attachment_notice": "실행 중에는 텍스트만 추가할 수 있어, 파일이 있는 메시지는 이번 실행 후에 처리됩니다.",
     "restart_send": "중지하고 보내기",
-    "restart_failed": "현재 실행을 중지하지 못했습니다. 메시지는 보내지 않았습니다."
+    "restart_failed": "현재 실행을 중지하지 못했습니다. 메시지는 보내지 않았습니다.",
+    "assistance": {
+      "open": "도움 필요",
+      "closed": "처리 완료",
+      "close": "처리 완료로 표시",
+      "reopen": "요청 다시 열기",
+      "update_failed": "도움 요청을 업데이트하지 못했습니다"
+    }
   },
   "reply": {
     "placeholder": "답글 남기기...",

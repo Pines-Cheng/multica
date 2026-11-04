@@ -479,11 +479,11 @@ func TestIssueChatCards_DeliveryAndAttentionOnlyLinkToExistingPages(t *testing.T
 	}
 	commentID := f.fx.Insert(t, "comment", testutil.Cols{
 		"issue_id": issueID, "workspace_id": f.ws, "author_type": "agent", "author_id": f.leader,
-		"content": "[@Owner](mention://member/" + f.user + ") please review", "type": "comment",
+		"content": "[@Owner](mention://member/" + f.user + ") please review", "type": "comment", "assistance_status": "open",
 	})
 	f.bus.Publish(events.Event{Type: protocol.EventCommentCreated, WorkspaceID: f.ws, Payload: map[string]any{"comment": map[string]any{
 		"id": commentID, "issue_id": issueID, "author_type": "agent", "author_id": f.leader,
-		"content": "[@Owner](mention://member/" + f.user + ") please review", "type": "comment",
+		"content": "[@Owner](mention://member/" + f.user + ") please review", "type": "comment", "assistance_status": "open",
 	}}})
 	attention := decodeIssueCard(t, f.api.sent[len(f.api.sent)-1].CardJSON)
 	buttons := 0

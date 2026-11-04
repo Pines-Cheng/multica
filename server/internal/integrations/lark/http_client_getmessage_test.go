@@ -31,7 +31,8 @@ func TestHTTPClient_GetMessageSingle(t *testing.T) {
 			"data": map[string]any{
 				"items": []any{
 					map[string]any{
-						"message_id":  "om_parent",
+						"message_id":       "om_parent",
+						"message_position": "12", "thread_message_position": "3",
 						"msg_type":    "text",
 						"create_time": "1000",
 						"sender":      map[string]any{"id": "ou_a", "id_type": "open_id", "sender_type": "user"},
@@ -54,6 +55,9 @@ func TestHTTPClient_GetMessageSingle(t *testing.T) {
 	m := items[0]
 	if m.MessageID != "om_parent" || m.MessageType != "text" || m.Content != `{"text":"hi"}` {
 		t.Errorf("normalized = %+v", m)
+	}
+	if m.MessagePosition != "12" || m.ThreadMessagePosition != "3" {
+		t.Errorf("message position was lost: %+v", m)
 	}
 	if m.SenderID != "ou_a" || m.SenderType != "user" {
 		t.Errorf("sender = id:%q type:%q", m.SenderID, m.SenderType)

@@ -211,18 +211,20 @@ type DownloadedResourceStream struct {
 // JSON-encoded, msg_type-specific string Lark double-encodes) so the
 // flattener — not the transport client — owns content interpretation.
 type LarkMessage struct {
-	MessageID      string
-	MessageType    string // Lark `msg_type`: text / post / image / merge_forward / …
-	Content        string // raw body.content (a JSON-encoded string)
-	SenderID       string // sender.id (open_id for users, app_id for apps)
-	SenderType     string // sender.sender_type: user / app / anonymous / …
-	CreateTime     string // epoch milliseconds, as Lark returns it (a string)
-	ParentID       string
-	RootID         string
-	ThreadID       string // Lark topic (话题) id; empty for messages outside a thread
-	UpperMessageID string // the merge_forward parent a child hangs under
-	Deleted        bool
-	Mentions       []LarkMessageMention
+	MessagePosition       string
+	ThreadMessagePosition string
+	MessageID             string
+	MessageType           string // Lark `msg_type`: text / post / image / merge_forward / …
+	Content               string // raw body.content (a JSON-encoded string)
+	SenderID              string // sender.id (open_id for users, app_id for apps)
+	SenderType            string // sender.sender_type: user / app / anonymous / …
+	CreateTime            string // epoch milliseconds, as Lark returns it (a string)
+	ParentID              string
+	RootID                string
+	ThreadID              string // Lark topic (话题) id; empty for messages outside a thread
+	UpperMessageID        string // the merge_forward parent a child hangs under
+	Deleted               bool
+	Mentions              []LarkMessageMention
 }
 
 // LarkMessageMention mirrors a mentions[] entry on the IM REST item

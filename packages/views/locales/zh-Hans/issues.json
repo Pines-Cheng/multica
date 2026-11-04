@@ -655,7 +655,14 @@
     "recipient_count_other": "{{count}} 个智能体会收到",
     "steer_attachment_notice": "插话只支持文字，带附件的消息会在本轮结束后处理。",
     "restart_send": "停止并发送",
-    "restart_failed": "没能停止当前运行，消息还没有发送。"
+    "restart_failed": "没能停止当前运行，消息还没有发送。",
+    "assistance": {
+      "open": "待协助",
+      "closed": "协助已处理",
+      "close": "标记已处理",
+      "reopen": "重新打开请求",
+      "update_failed": "更新协助请求失败"
+    }
   },
   "reply": {
     "placeholder": "回复...",

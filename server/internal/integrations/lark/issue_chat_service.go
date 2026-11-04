@@ -632,14 +632,15 @@ func (s *IssueChatService) dispatch(fn func()) {
 // payload carries handler.CommentResponse or an equivalent map, so it is
 // decoded through JSON rather than by type.
 type commentEvent struct {
-	ID         string  `json:"id"`
-	IssueID    string  `json:"issue_id"`
-	AuthorType string  `json:"author_type"`
-	AuthorID   string  `json:"author_id"`
-	Content    string  `json:"content"`
-	Type       string  `json:"type"`
-	ParentID   *string `json:"parent_id"`
-	DeletedAt  *string `json:"deleted_at"`
+	AssistanceStatus string  `json:"assistance_status"`
+	ID               string  `json:"id"`
+	IssueID          string  `json:"issue_id"`
+	AuthorType       string  `json:"author_type"`
+	AuthorID         string  `json:"author_id"`
+	Content          string  `json:"content"`
+	Type             string  `json:"type"`
+	ParentID         *string `json:"parent_id"`
+	DeletedAt        *string `json:"deleted_at"`
 	// SourceTaskID is the agent run that wrote the comment.
 	SourceTaskID *string `json:"source_task_id"`
 }
@@ -694,6 +695,11 @@ func (s *IssueChatService) runJob(job commentSyncJob) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), issueChatSyncTimeout)
 		err = s.syncComment(ctx, job)
+		if err == nil && (job.comment.AssistanceStatus == "open" || job.comment.AssistanceStatus == "closed" || job.eventType == protocol.EventCommentDeleted) {
+			if id, parseErr := util.ParseUUID(job.comment.IssueID); parseErr == nil {
+				err = s.refreshProgress(ctx, id)
+			}
+		}
 		cancel()
 		if err == nil || errors.Is(err, errSyncPermanent) {
 			break
@@ -713,6 +719,21 @@ func (s *IssueChatService) syncComment(ctx context.Context, job commentSyncJob) 
 	commentID, err := util.ParseUUID(job.comment.ID)
 	if err != nil {
 		return errSyncPermanent
+	}
+	if job.comment.AssistanceStatus == "open" || job.comment.AssistanceStatus == "closed" {
+		workspaceID, parseErr := util.ParseUUID(job.workspaceID)
+		if parseErr != nil {
+			return errSyncPermanent
+		}
+		current, loadErr := s.cfg.Store.GetCommentInWorkspace(ctx, db.GetCommentInWorkspaceParams{ID: commentID, WorkspaceID: workspaceID})
+		if loadErr != nil {
+			return loadErr
+		}
+		job.comment.Content = current.Content
+		job.comment.AssistanceStatus = current.AssistanceStatus
+		if current.DeletedAt.Valid {
+			job.eventType = protocol.EventCommentDeleted
+		}
 	}
 	binding, err := s.cfg.Store.GetChannelIssueChatByIssue(ctx, db.GetChannelIssueChatByIssueParams{IssueID: issueID, ChannelType: channelTypeFeishu})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -782,8 +803,12 @@ func (s *IssueChatService) authorLabel(ctx context.Context, c commentEvent) stri
 }
 
 func (s *IssueChatService) mirrorNewComment(ctx context.Context, binding db.ChannelIssueChat, steward Installation, commentID pgtype.UUID, c commentEvent) error {
-	if taken, err := s.takeOverRunCard(ctx, binding, commentID, c); err != nil || taken {
-		return err
+	// A new assistance request must deliver a fresh native mention instead of
+	// silently patching a run card the recipient may already have read.
+	if c.AssistanceStatus != "open" {
+		if taken, err := s.takeOverRunCard(ctx, binding, commentID, c); err != nil || taken {
+			return err
+		}
 	}
 	sender, header := s.commentSender(ctx, binding, steward, c)
 	target, err := s.replyTarget(ctx, binding, c)
@@ -902,9 +927,9 @@ func (s *IssueChatService) patchMirrors(ctx context.Context, binding db.ChannelI
 }
 
 // commentCardJSON renders a comment's card as sender posts it. relayLabel
-// names the author when another bot relays the comment. A comment in which an
-// agent mentions members asks them for something, so its header says who
-// must act and stands out in the chat.
+// names the author when another bot relays the comment. Only explicit open
+// assistance requests name who must act; ordinary mentions retain their normal
+// comment appearance.
 func (s *IssueChatService) commentCardJSON(ctx context.Context, workspaceID pgtype.UUID, sender Installation, relayLabel string, c commentEvent) (string, error) {
 	body := s.commentMarkdown(ctx, workspaceID, sender, c.Content)
 	if who := attentionNames(c); who != "" {
@@ -922,21 +947,31 @@ func (s *IssueChatService) commentCardJSON(ctx context.Context, workspaceID pgty
 		}
 		return marshalIssueCard(content)
 	}
+	if c.AssistanceStatus == "closed" {
+		_, link := s.issueCommentLink(ctx, c.IssueID, c.ID)
+		return marshalIssueCard(issueCardContent{title: "协助已处理", subtitle: relayLabel, summary: cardSummary("协助已处理", body), template: "grey", sections: []string{body}, action: issueCardLink{label: "查看请求", url: link}})
+	}
 	if relayLabel != "" {
 		return issueChatCardJSON(relayLabel, "来自 Multica", body)
 	}
 	return issueChatCardJSON("", "", body)
 }
 
-// attentionNames lists the members an agent's comment mentions.
+// attentionNames lists active member mentions in an open assistance request.
 func attentionNames(c commentEvent) string {
-	if c.AuthorType != "agent" {
+	if c.AssistanceStatus != "open" {
 		return ""
+	}
+	active := map[string]bool{}
+	for _, mention := range util.ParseMentions(c.Content) {
+		if mention.Type == "member" {
+			active[mention.ID] = true
+		}
 	}
 	var names []string
 	seen := map[string]bool{}
 	for _, m := range util.MentionRe.FindAllStringSubmatch(c.Content, -1) {
-		if m[2] == "member" && !seen[m[3]] {
+		if m[2] == "member" && active[m[3]] && !seen[m[3]] {
 			seen[m[3]] = true
 			names = append(names, m[1])
 		}

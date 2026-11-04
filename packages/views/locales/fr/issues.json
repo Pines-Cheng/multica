@@ -388,6 +388,7 @@
     "metadata_restore": "Rétablir la taille de la boîte de dialogue",
     "metadata_copy_failed": "Impossible de copier les métadonnées",
     "metadata_description": "Données clé-valeur enregistrées par les agents et les intégrations pour poursuivre le workflow.",
+
     "section_load_failed_retry": "Échec du chargement. Réessayer",
     "not_found": "Cette tâche n'existe pas ou a été supprimée dans cet espace de travail.",
     "breadcrumb_project_unknown": "Projet inconnu",
@@ -674,7 +675,14 @@
     "recipient_count_other": "{{count}} agents recevront ce message",
     "steer_attachment_notice": "Seul du texte peut rejoindre une exécution en cours : un message avec des fichiers sera traité après.",
     "restart_send": "Arrêter et envoyer",
-    "restart_failed": "Impossible d'arrêter l'exécution en cours. Votre message n'a pas été envoyé."
+    "restart_failed": "Impossible d'arrêter l'exécution en cours. Votre message n'a pas été envoyé.",
+    "assistance": {
+      "open": "Aide requise",
+      "closed": "Demande traitée",
+      "close": "Marquer comme traitée",
+      "reopen": "Rouvrir la demande",
+      "update_failed": "Impossible de mettre à jour la demande"
+    }
   },
   "reply": {
     "placeholder": "Laisser une réponse...",

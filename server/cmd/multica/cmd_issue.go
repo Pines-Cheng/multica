@@ -759,6 +759,7 @@ func init() {
 	issueCommentAddCmd.Flags().StringSlice("attachment", nil, "File path(s) to attach (can be specified multiple times). Non-image files, HTML included, show as file cards that open in the viewer; to render a chart inside the comment, put a ```html or ```mermaid block in the content instead")
 	issueCommentAddCmd.Flags().StringSlice("steer", nil, "Run ID (full UUID or short prefix) whose in-progress turn should receive this comment instead of a follow-up run (repeatable)")
 	issueCommentAddCmd.Flags().Bool("steer-active", false, "Add this comment to the running turn of every agent on this issue you may steer, and of any other recipient that is running")
+	issueCommentAddCmd.Flags().Bool("request-assistance", false, "Request human assistance explicitly; the content must mention a workspace member")
 	issueCommentAddCmd.Flags().String("output", "json", "Output format: table or json")
 
 	// issue comment update
@@ -772,6 +773,14 @@ func init() {
 	// issue comment resolve/unresolve
 	issueCommentResolveCmd.Flags().String("output", "json", "Output format: table or json")
 	issueCommentUnresolveCmd.Flags().String("output", "json", "Output format: table or json")
+	for _, action := range []string{"close", "reopen"} {
+		action := action
+		command := &cobra.Command{Use: "assistance-" + action + " <comment-id>", Short: action + " an explicit human assistance request", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+			return runIssueCommentAssistance(cmd, args[0], action)
+		}}
+		command.Flags().String("output", "json", "Output format: table or json")
+		issueCommentCmd.AddCommand(command)
+	}
 
 	// issue search
 	issueSearchCmd.Flags().Int("limit", 20, "Maximum number of results to return")
@@ -2608,6 +2617,9 @@ func runIssueCommentAdd(cmd *cobra.Command, args []string) error {
 	}
 
 	body := map[string]any{"content": content}
+	if request, _ := cmd.Flags().GetBool("request-assistance"); request {
+		body["request_assistance"] = true
+	}
 	if len(steerTargets) > 0 {
 		steerTaskIDs := make([]string, len(steerTargets))
 		for i, target := range steerTargets {
@@ -2630,6 +2642,9 @@ func runIssueCommentAdd(cmd *cobra.Command, args []string) error {
 	var result map[string]any
 	if err := client.PostJSON(ctx, "/api/issues/"+issueID+"/comments", body, &result); err != nil {
 		return fmt.Errorf("add comment: %w", err)
+	}
+	if request, _ := cmd.Flags().GetBool("request-assistance"); request && result["assistance_status"] != "open" {
+		return fmt.Errorf("comment %v was posted, but the server did not create an assistance request; check server support before posting again", result["id"])
 	}
 
 	fmt.Fprintf(os.Stderr, "Comment added to issue %s.\n", issueRef.Display)
@@ -2713,6 +2728,24 @@ func runIssueCommentDelete(cmd *cobra.Command, args []string) error {
 
 func runIssueCommentResolve(cmd *cobra.Command, args []string) error {
 	return runIssueCommentResolution(cmd, args[0], true)
+}
+
+func runIssueCommentAssistance(cmd *cobra.Command, commentID, action string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	var result map[string]any
+	if err := client.PostJSON(ctx, "/api/comments/"+url.PathEscape(commentID)+"/assistance/"+action, nil, &result); err != nil {
+		return fmt.Errorf("%s assistance: %w", action, err)
+	}
+	fmt.Fprintf(os.Stderr, "Assistance request %s updated.\n", commentID)
+	if output, _ := cmd.Flags().GetString("output"); output == "table" {
+		return nil
+	}
+	return cli.PrintJSON(os.Stdout, result)
 }
 
 func runIssueCommentUnresolve(cmd *cobra.Command, args []string) error {

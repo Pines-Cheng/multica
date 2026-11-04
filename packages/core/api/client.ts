@@ -1777,6 +1777,14 @@ export class ApiClient {
     return this.fetch(`/api/comments/${commentId}/resolve`, { method: "POST" });
   }
 
+  async setCommentAssistance(commentId: string, status: "open" | "closed"): Promise<Comment> {
+    const path = `/api/comments/${commentId}/assistance/${status === "closed" ? "close" : "reopen"}`;
+    const raw = await this.fetch<unknown>(path, { method: "POST" });
+    const parsed = parseWithFallback<Comment | null>(raw, CommentSchema, null, { endpoint: path });
+    if (parsed === null || parsed.assistance_status !== status) throw new Error(`Malformed response from ${path}`);
+    return parsed;
+  }
+
   async unresolveComment(commentId: string): Promise<Comment> {
     return this.fetch(`/api/comments/${commentId}/resolve`, { method: "DELETE" });
   }

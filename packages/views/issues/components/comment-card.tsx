@@ -63,6 +63,7 @@ import { useAttachmentVersions } from "./deliverables/attachment-versions";
 import { VersionBadge } from "./deliverables/version-badge";
 import { useRunCommentMotion } from "./use-run-comment-motion";
 import { WakeupSourceChip } from "./wakeup-source-chip";
+import { CommentAssistance } from "./comment-assistance";
 
 const commentActionClassName =
   "text-muted-foreground aria-expanded:bg-transparent aria-expanded:hover:bg-muted dark:aria-expanded:hover:bg-muted/50";
@@ -903,6 +904,7 @@ function CommentRow({
         </div>
       ) : (
         <>
+          <div className="pl-12 pr-4 max-md:pl-3 max-md:pr-3"><CommentAssistance issueId={issueId} entry={entry} canAct={!!currentUserId && !!onResolveToggle} /></div>
           <div tabIndex={currentUserId ? 0 : undefined} role="group"
             aria-label={t(($) => $.reply.annotations.source_label, { name: entry.actor_name || getActorName(entry.actor_type, entry.actor_id) })}
             data-comment-content={entry.id} className="pl-12 pr-4 max-md:pl-3 max-md:pr-3 text-body leading-relaxed text-foreground">
@@ -1453,6 +1455,7 @@ function CommentCardImpl({
               </div>
             ) : !noticeRun && (
               <>
+                <div className="pl-8 max-md:pl-0"><CommentAssistance issueId={issueId} entry={entry} canAct={!!currentUserId && !!onResolveToggle} /></div>
                 <div tabIndex={currentUserId ? 0 : undefined} role="group"
             aria-label={t(($) => $.reply.annotations.source_label, { name: entry.actor_name || getActorName(entry.actor_type, entry.actor_id) })}
             data-comment-content={entry.id} className="pl-8 max-md:pl-0 text-body leading-relaxed text-foreground">

@@ -399,10 +399,8 @@ func TestIssueChatService_MirrorsComments(t *testing.T) {
 		if !strings.Contains(card, "**@Ada** please confirm") || strings.Contains(card, "<at") {
 			t.Fatalf("coder card must fall back to the bold name: %s", card)
 		}
-		// An agent asking a member for something is flagged in the header;
-		// a member's own comment is not.
-		if !strings.Contains(card, "待 Ada 处理") || !strings.Contains(api.sent[0].CardJSON, `"template":"orange"`) {
-			t.Fatalf("agent request is not flagged: %s", api.sent[0].CardJSON)
+		if strings.Contains(card, "待 Ada 处理") {
+			t.Fatalf("an ordinary mention must not become an assistance request: %s", card)
 		}
 	})
 

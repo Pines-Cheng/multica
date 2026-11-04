@@ -27,21 +27,22 @@ import (
 )
 
 type CommentResponse struct {
-	ID             string  `json:"id"`
-	IssueID        string  `json:"issue_id"`
-	AuthorType     string  `json:"author_type"`
-	AuthorID       string  `json:"author_id"`
-	Content        string  `json:"content"`
-	Type           string  `json:"type"`
-	ParentID       *string `json:"parent_id"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
-	Revision       int64   `json:"revision"`
-	IssueRevision  int64   `json:"issue_revision,omitempty"`
-	ResolvedAt     *string `json:"resolved_at"`
-	ResolvedByType *string `json:"resolved_by_type"`
-	ResolvedByID   *string `json:"resolved_by_id"`
-	SourceTaskID   *string `json:"source_task_id,omitempty"`
+	ID               string  `json:"id"`
+	IssueID          string  `json:"issue_id"`
+	AuthorType       string  `json:"author_type"`
+	AuthorID         string  `json:"author_id"`
+	Content          string  `json:"content"`
+	Type             string  `json:"type"`
+	ParentID         *string `json:"parent_id"`
+	CreatedAt        string  `json:"created_at"`
+	UpdatedAt        string  `json:"updated_at"`
+	Revision         int64   `json:"revision"`
+	IssueRevision    int64   `json:"issue_revision,omitempty"`
+	ResolvedAt       *string `json:"resolved_at"`
+	ResolvedByType   *string `json:"resolved_by_type"`
+	ResolvedByID     *string `json:"resolved_by_id"`
+	AssistanceStatus string  `json:"assistance_status"`
+	SourceTaskID     *string `json:"source_task_id,omitempty"`
 	// DeletedAt marks a tombstone: a comment deleted while it still had
 	// replies (#8296). Its content is empty and it carries no attachments or
 	// reactions; it stays only so the replies keep their direct parent.
@@ -114,24 +115,25 @@ func commentToResponse(c db.Comment, reactions []ReactionResponse, attachments [
 		attachments = []AttachmentResponse{}
 	}
 	return CommentResponse{
-		ID:             uuidToString(c.ID),
-		IssueID:        uuidToString(c.IssueID),
-		AuthorType:     c.AuthorType,
-		AuthorID:       uuidToString(c.AuthorID),
-		Content:        c.Content,
-		Type:           c.Type,
-		ParentID:       uuidToPtr(c.ParentID),
-		CreatedAt:      timestampToString(c.CreatedAt),
-		UpdatedAt:      timestampToString(c.UpdatedAt),
-		Revision:       c.Revision,
-		ResolvedAt:     timestampToPtr(c.ResolvedAt),
-		ResolvedByType: textToPtr(c.ResolvedByType),
-		ResolvedByID:   uuidToPtr(c.ResolvedByID),
-		SourceTaskID:   uuidToPtr(c.SourceTaskID),
-		DeletedAt:      timestampToPtr(c.DeletedAt),
-		QuickActionID:  uuidToPtr(c.QuickActionID),
-		Reactions:      reactions,
-		Attachments:    attachments,
+		ID:               uuidToString(c.ID),
+		IssueID:          uuidToString(c.IssueID),
+		AuthorType:       c.AuthorType,
+		AuthorID:         uuidToString(c.AuthorID),
+		Content:          c.Content,
+		Type:             c.Type,
+		ParentID:         uuidToPtr(c.ParentID),
+		CreatedAt:        timestampToString(c.CreatedAt),
+		UpdatedAt:        timestampToString(c.UpdatedAt),
+		Revision:         c.Revision,
+		ResolvedAt:       timestampToPtr(c.ResolvedAt),
+		ResolvedByType:   textToPtr(c.ResolvedByType),
+		ResolvedByID:     uuidToPtr(c.ResolvedByID),
+		AssistanceStatus: c.AssistanceStatus,
+		SourceTaskID:     uuidToPtr(c.SourceTaskID),
+		DeletedAt:        timestampToPtr(c.DeletedAt),
+		QuickActionID:    uuidToPtr(c.QuickActionID),
+		Reactions:        reactions,
+		Attachments:      attachments,
 	}
 }
 
@@ -734,23 +736,24 @@ func (h *Handler) fetchCommentsForList(ctx context.Context, args fetchCommentsAr
 			replies := make([]db.Comment, 0, len(rows))
 			for _, r := range rows {
 				c := db.Comment{
-					ID:             r.ID,
-					IssueID:        r.IssueID,
-					AuthorType:     r.AuthorType,
-					AuthorID:       r.AuthorID,
-					Content:        r.Content,
-					Type:           r.Type,
-					CreatedAt:      r.CreatedAt,
-					UpdatedAt:      r.UpdatedAt,
-					ParentID:       r.ParentID,
-					WorkspaceID:    r.WorkspaceID,
-					ResolvedAt:     r.ResolvedAt,
-					ResolvedByType: r.ResolvedByType,
-					ResolvedByID:   r.ResolvedByID,
-					SourceTaskID:   r.SourceTaskID,
-					QuickActionID:  r.QuickActionID,
-					Revision:       r.Revision,
-					DeletedAt:      r.DeletedAt,
+					ID:               r.ID,
+					IssueID:          r.IssueID,
+					AuthorType:       r.AuthorType,
+					AuthorID:         r.AuthorID,
+					Content:          r.Content,
+					Type:             r.Type,
+					CreatedAt:        r.CreatedAt,
+					UpdatedAt:        r.UpdatedAt,
+					ParentID:         r.ParentID,
+					WorkspaceID:      r.WorkspaceID,
+					ResolvedAt:       r.ResolvedAt,
+					ResolvedByType:   r.ResolvedByType,
+					ResolvedByID:     r.ResolvedByID,
+					AssistanceStatus: r.AssistanceStatus,
+					SourceTaskID:     r.SourceTaskID,
+					QuickActionID:    r.QuickActionID,
+					Revision:         r.Revision,
+					DeletedAt:        r.DeletedAt,
 				}
 				if !r.ParentID.Valid {
 					root := c
@@ -829,23 +832,24 @@ func (h *Handler) fetchCommentsForList(ctx context.Context, args fetchCommentsAr
 		replies := make([]db.Comment, 0, len(rows))
 		for _, r := range rows {
 			c := db.Comment{
-				ID:             r.ID,
-				IssueID:        r.IssueID,
-				AuthorType:     r.AuthorType,
-				AuthorID:       r.AuthorID,
-				Content:        r.Content,
-				Type:           r.Type,
-				CreatedAt:      r.CreatedAt,
-				UpdatedAt:      r.UpdatedAt,
-				ParentID:       r.ParentID,
-				WorkspaceID:    r.WorkspaceID,
-				ResolvedAt:     r.ResolvedAt,
-				ResolvedByType: r.ResolvedByType,
-				ResolvedByID:   r.ResolvedByID,
-				SourceTaskID:   r.SourceTaskID,
-				QuickActionID:  r.QuickActionID,
-				Revision:       r.Revision,
-				DeletedAt:      r.DeletedAt,
+				ID:               r.ID,
+				IssueID:          r.IssueID,
+				AuthorType:       r.AuthorType,
+				AuthorID:         r.AuthorID,
+				Content:          r.Content,
+				Type:             r.Type,
+				CreatedAt:        r.CreatedAt,
+				UpdatedAt:        r.UpdatedAt,
+				ParentID:         r.ParentID,
+				WorkspaceID:      r.WorkspaceID,
+				ResolvedAt:       r.ResolvedAt,
+				ResolvedByType:   r.ResolvedByType,
+				ResolvedByID:     r.ResolvedByID,
+				AssistanceStatus: r.AssistanceStatus,
+				SourceTaskID:     r.SourceTaskID,
+				QuickActionID:    r.QuickActionID,
+				Revision:         r.Revision,
+				DeletedAt:        r.DeletedAt,
 			}
 			if !r.ParentID.Valid {
 				root := c
@@ -918,23 +922,24 @@ func (h *Handler) fetchCommentsForList(ctx context.Context, args fetchCommentsAr
 				continue
 			}
 			comments = append(comments, db.Comment{
-				ID:             r.ID,
-				IssueID:        r.IssueID,
-				AuthorType:     r.AuthorType,
-				AuthorID:       r.AuthorID,
-				Content:        r.Content,
-				Type:           r.Type,
-				CreatedAt:      r.CreatedAt,
-				UpdatedAt:      r.UpdatedAt,
-				ParentID:       r.ParentID,
-				WorkspaceID:    r.WorkspaceID,
-				ResolvedAt:     r.ResolvedAt,
-				ResolvedByType: r.ResolvedByType,
-				ResolvedByID:   r.ResolvedByID,
-				SourceTaskID:   r.SourceTaskID,
-				QuickActionID:  r.QuickActionID,
-				Revision:       r.Revision,
-				DeletedAt:      r.DeletedAt,
+				ID:               r.ID,
+				IssueID:          r.IssueID,
+				AuthorType:       r.AuthorType,
+				AuthorID:         r.AuthorID,
+				Content:          r.Content,
+				Type:             r.Type,
+				CreatedAt:        r.CreatedAt,
+				UpdatedAt:        r.UpdatedAt,
+				ParentID:         r.ParentID,
+				WorkspaceID:      r.WorkspaceID,
+				ResolvedAt:       r.ResolvedAt,
+				ResolvedByType:   r.ResolvedByType,
+				ResolvedByID:     r.ResolvedByID,
+				AssistanceStatus: r.AssistanceStatus,
+				SourceTaskID:     r.SourceTaskID,
+				QuickActionID:    r.QuickActionID,
+				Revision:         r.Revision,
+				DeletedAt:        r.DeletedAt,
 			})
 		}
 
@@ -992,7 +997,7 @@ func (h *Handler) fetchCommentsForList(ctx context.Context, args fetchCommentsAr
 					ID: r.ID, IssueID: r.IssueID, AuthorType: r.AuthorType, AuthorID: r.AuthorID,
 					Content: r.Content, Type: r.Type, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 					ParentID: r.ParentID, WorkspaceID: r.WorkspaceID, ResolvedAt: r.ResolvedAt,
-					ResolvedByType: r.ResolvedByType, ResolvedByID: r.ResolvedByID,
+					ResolvedByType: r.ResolvedByType, ResolvedByID: r.ResolvedByID, AssistanceStatus: r.AssistanceStatus,
 					SourceTaskID: r.SourceTaskID, QuickActionID: r.QuickActionID, Revision: r.Revision,
 					DeletedAt: r.DeletedAt,
 				}
@@ -1023,7 +1028,7 @@ func (h *Handler) fetchCommentsForList(ctx context.Context, args fetchCommentsAr
 				ID: r.ID, IssueID: r.IssueID, AuthorType: r.AuthorType, AuthorID: r.AuthorID,
 				Content: r.Content, Type: r.Type, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 				ParentID: r.ParentID, WorkspaceID: r.WorkspaceID, ResolvedAt: r.ResolvedAt,
-				ResolvedByType: r.ResolvedByType, ResolvedByID: r.ResolvedByID,
+				ResolvedByType: r.ResolvedByType, ResolvedByID: r.ResolvedByID, AssistanceStatus: r.AssistanceStatus,
 				SourceTaskID: r.SourceTaskID, QuickActionID: r.QuickActionID, Revision: r.Revision,
 				DeletedAt: r.DeletedAt,
 			}
@@ -1410,11 +1415,12 @@ func keepRootConnected(byID map[string]db.Comment) []db.Comment {
 }
 
 type CreateCommentRequest struct {
-	Content          string   `json:"content"`
-	Type             string   `json:"type"`
-	ParentID         *string  `json:"parent_id"`
-	AttachmentIDs    []string `json:"attachment_ids"`
-	SuppressAgentIDs []string `json:"suppress_agent_ids"`
+	RequestAssistance bool     `json:"request_assistance"`
+	Content           string   `json:"content"`
+	Type              string   `json:"type"`
+	ParentID          *string  `json:"parent_id"`
+	AttachmentIDs     []string `json:"attachment_ids"`
+	SuppressAgentIDs  []string `json:"suppress_agent_ids"`
 	// SteerTaskIDs are the running turns the author chose to add this comment
 	// to, instead of starting a follow-up run for their agents. A turn that
 	// has ended, or cannot take additional input, is never swapped for another
@@ -1711,6 +1717,13 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 
 	// Determine author identity: agent (via X-Agent-ID header) or member.
 	authorType, authorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
+	assistanceStatus := "none"
+	if req.RequestAssistance {
+		if !h.validateAssistanceRecipients(w, r, issue.WorkspaceID, req.Content) {
+			return
+		}
+		assistanceStatus = "open"
+	}
 
 	// sourceTaskID captures the agent's currently-executing task when it posts
 	// via the CLI (X-Task-ID header). Stamping it on the comment row keeps the
@@ -1814,15 +1827,16 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	createParams := db.CreateCommentParams{
-		ID:           dbid.NewV7(),
-		IssueID:      issue.ID,
-		WorkspaceID:  issue.WorkspaceID,
-		AuthorType:   authorType,
-		AuthorID:     parseUUID(authorID),
-		Content:      req.Content,
-		Type:         req.Type,
-		ParentID:     parentID,
-		SourceTaskID: sourceTaskID,
+		AssistanceStatus: pgtype.Text{String: assistanceStatus, Valid: true},
+		ID:               dbid.NewV7(),
+		IssueID:          issue.ID,
+		WorkspaceID:      issue.WorkspaceID,
+		AuthorType:       authorType,
+		AuthorID:         parseUUID(authorID),
+		Content:          req.Content,
+		Type:             req.Type,
+		ParentID:         parentID,
+		SourceTaskID:     sourceTaskID,
 		// The author's "don't start" choices outlive this call: completion
 		// replay skips the agents it names.
 		SuppressedAgentIds: suppressAgentIDs,
@@ -3384,6 +3398,9 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 			writeRevisionConflict(w, "comment", existing.ID, *req.ExpectedRevision, existing.Revision)
 			return
 		}
+	}
+	if existing.AssistanceStatus == "open" && !h.validateAssistanceRecipients(w, r, existing.WorkspaceID, req.Content) {
+		return
 	}
 	strictContentEdit := req.ContentBase != nil || req.ExpectedRevision != nil
 

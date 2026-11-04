@@ -856,6 +856,7 @@ export function useCreateComment(issueId: string) {
         content: comment.content,
         parent_id: comment.parent_id,
         comment_type: comment.type,
+        assistance_status: comment.assistance_status,
         reactions: comment.reactions ?? [],
         attachments: comment.attachments ?? [],
         created_at: comment.created_at,
@@ -1066,6 +1067,15 @@ export function useResolveComment(issueId: string) {
     onSettled: () => {
       qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId) });
     },
+  });
+}
+
+export function useSetCommentAssistance(issueId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ commentId, status }: { commentId: string; status: "open" | "closed" }) =>
+      api.setCommentAssistance(commentId, status),
+    onSuccess: () => qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId) }),
   });
 }
 

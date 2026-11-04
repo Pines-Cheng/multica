@@ -16,6 +16,7 @@ export interface Reaction {
 }
 
 export interface Comment {
+  assistance_status?: "none" | "open" | "closed";
   id: string;
   issue_id: string;
   author_type: CommentAuthorType;

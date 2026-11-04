@@ -20,6 +20,7 @@ export interface TimelineEntry {
   action?: string;
   details?: Record<string, unknown>;
   // Comment fields
+  assistance_status?: "none" | "open" | "closed";
   content?: string;
   parent_id?: string | null;
   updated_at?: string;

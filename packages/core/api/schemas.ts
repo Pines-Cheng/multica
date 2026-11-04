@@ -1059,6 +1059,7 @@ const CommentSupplementReceiptsSchema = z.array(z.unknown()).optional().catch(un
   }));
 
 const TimelineEntrySchema = z.object({
+  assistance_status: z.enum(["none", "open", "closed"]).catch("none"),
   type: z.string(),
   id: z.string(),
   actor_type: z.string(),
@@ -1219,6 +1220,7 @@ export const EMPTY_CREATE_FEEDBACK_RESPONSE: CreateFeedbackResponse = {
 };
 
 export const CommentSchema = z.object({
+  assistance_status: z.enum(["none", "open", "closed"]).catch("none"),
   id: z.string(),
   issue_id: z.string(),
   author_type: z.string(),

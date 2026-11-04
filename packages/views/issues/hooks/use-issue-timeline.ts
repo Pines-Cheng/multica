@@ -59,6 +59,7 @@ function commentToTimelineEntry(c: Comment): TimelineEntry {
     updated_at: c.updated_at,
     revision: c.revision,
     comment_type: c.type,
+    assistance_status: c.assistance_status,
     reactions: c.reactions ?? [],
     attachments: c.attachments ?? [],
     resolved_at: c.resolved_at,

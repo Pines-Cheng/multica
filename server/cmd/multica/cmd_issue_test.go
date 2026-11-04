@@ -563,6 +563,7 @@ func newIssueCommentAddTestCmd() *cobra.Command {
 	cmd.Flags().String("parent", "", "")
 	cmd.Flags().StringSlice("steer", nil, "")
 	cmd.Flags().Bool("steer-active", false, "")
+	cmd.Flags().Bool("request-assistance", false, "")
 	cmd.Flags().String("output", "json", "")
 	return cmd
 }

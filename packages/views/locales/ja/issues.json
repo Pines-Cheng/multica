@@ -655,7 +655,14 @@
     "recipient_count_other": "{{count}} 個のエージェントが受け取ります",
     "steer_attachment_notice": "実行中に追加できるのはテキストのみのため、ファイル付きのメッセージはこの実行の後に処理されます。",
     "restart_send": "停止して送信",
-    "restart_failed": "現在の実行を停止できませんでした。メッセージは送信されていません。"
+    "restart_failed": "現在の実行を停止できませんでした。メッセージは送信されていません。",
+    "assistance": {
+      "open": "対応が必要",
+      "closed": "対応済み",
+      "close": "対応済みにする",
+      "reopen": "依頼を再開",
+      "update_failed": "対応依頼を更新できませんでした"
+    }
   },
   "reply": {
     "placeholder": "返信を残す...",

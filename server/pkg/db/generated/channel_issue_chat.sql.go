@@ -314,7 +314,7 @@ func (q *Queries) GetChannelIssueMessageByTask(ctx context.Context, taskID pgtyp
 }
 
 const getLatestCommentBySourceTask = `-- name: GetLatestCommentBySourceTask :one
-SELECT id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids FROM comment
+SELECT id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids, assistance_status FROM comment
 WHERE source_task_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC
 LIMIT 1
@@ -345,6 +345,7 @@ func (q *Queries) GetLatestCommentBySourceTask(ctx context.Context, sourceTaskID
 		&i.RecoverySettledAt,
 		&i.DeletedAt,
 		&i.SuppressedAgentIds,
+		&i.AssistanceStatus,
 	)
 	return i, err
 }

@@ -3,11 +3,34 @@ import { createAuthStore } from "../auth";
 import { configStore } from "../config";
 import type { StorageAdapter, User } from "../types";
 import { ApiClient, ApiError, CHAT_DRAFT_RESTORE_CAPABILITY, clientErrorMessage } from "./client";
-import { EMPTY_PLUGIN_PACKAGE_LIST, EMPTY_PLUGIN_PREVIEW, EMPTY_PLUGIN_SURFACE_LAUNCH } from "./schemas";
+import { CommentSchema, EMPTY_PLUGIN_PACKAGE_LIST, EMPTY_PLUGIN_PREVIEW, EMPTY_PLUGIN_SURFACE_LAUNCH } from "./schemas";
 
 afterEach(() => {
   configStore.getState().setAgentConversationStartersSupported(false);
   vi.unstubAllGlobals();
+});
+
+describe("ApiClient assistance requests", () => {
+  const comment = { id: "c1", issue_id: "i1", author_type: "agent", author_id: "a1", content: "Please authenticate", type: "comment", parent_id: null, created_at: "now", updated_at: "now" };
+  it("closes a request and parses the response through the comment schema", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...comment, assistance_status: "closed" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    expect((await client.setCommentAssistance("c1", "closed")).assistance_status).toBe("closed");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.example.test/api/comments/c1/assistance/close");
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+  });
+  it("retains ordinary-comment compatibility for missing or unknown status", async () => {
+    for (const state of [undefined, null, "future"]) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...comment, assistance_status: state }), { status: 200 })));
+      expect(CommentSchema.parse({ ...comment, assistance_status: state }).assistance_status).toBe("none");
+      await expect(new ApiClient("https://api.example.test").setCommentAssistance("c1", "open")).rejects.toThrow("Malformed response");
+    }
+  });
+  it("rejects malformed action responses", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 })));
+    await expect(new ApiClient("https://api.example.test").setCommentAssistance("c1", "open")).rejects.toThrow("Malformed response");
+  });
 });
 
 describe("ApiClient status reorder", () => {
