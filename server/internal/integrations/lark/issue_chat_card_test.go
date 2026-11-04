@@ -107,7 +107,7 @@ func TestMetadataCardLinks_OnlyUsesExistingWebLinks(t *testing.T) {
 }
 
 func TestIssueCard_LightSectionsKeepProgressAndAllArtifactLinks(t *testing.T) {
-	links := metadataCardLinks([]byte(`{"Bits":"https://bits.example/task","MR":"https://code.example/mr","Meego":"https://meego.example/story","PPE":"https://ppe.example/?env=test"," prd ":"https://docs.example/spec(4)#section","自测报告":"https://tests.example/report"}`))
+	links := metadataCardLinks([]byte(`{"Bits":"https://bits.example/task","MR":"https://code.example/mr","Meego":"https://meego.example/story","PPE":"https://ppe.example/?env=test"," prd ":"https://docs.example/spec(4)#section"," TechDesign ":"https://docs.example/design","自测报告":"https://tests.example/report"}`))
 	raw, err := marshalIssueCard(issueCardContent{
 		progress: []issueCardProgress{
 			{title: "[开发](https://multica.example/dev/issues/DEV-30)", status: "已完成", assignee: "Developer & Reviewer"},
@@ -134,12 +134,16 @@ func TestIssueCard_LightSectionsKeepProgressAndAllArtifactLinks(t *testing.T) {
 		t.Fatalf("artifacts must form a single text section: %+v", section)
 	}
 	rows := section.Columns[0].Elements
-	if len(rows) != 4 || rows[0].Content != "**关键产物**" {
-		t.Fatalf("expected a heading and three rows: %+v", rows)
+	if len(rows) != 5 || rows[0].Content != "**相关资料**" {
+		t.Fatalf("expected a heading and four rows: %+v", rows)
 	}
-	for i, label := range []string{"需求文档 · PRD", "需求详情 · Meego", "开发任务 · Bits", "代码变更 · MR", "PPE 环境", "自测报告"} {
+	for i, label := range []string{"需求文档 · PRD", "技术方案", "需求详情 · Meego", "开发任务 · Bits", "代码变更 · MR", "PPE 环境", "自测报告"} {
 		row := rows[1+i/2]
-		if len(row.Columns) != 2 || len(row.Columns[i%2].Elements) != 1 {
+		wantColumns := 2
+		if i == 6 {
+			wantColumns = 1
+		}
+		if len(row.Columns) != wantColumns || len(row.Columns[i%2].Elements) != 1 {
 			t.Fatalf("artifact text must remain in two columns: %+v", row)
 		}
 		link := row.Columns[i%2].Elements[0]
@@ -159,7 +163,7 @@ func TestIssueCard_LightSectionsKeepProgressAndAllArtifactLinks(t *testing.T) {
 	}
 	for _, invalid := range [][]issueCardLink{nil, {{label: "PRD", url: "javascript:alert(1)"}}} {
 		empty, err := marshalIssueCard(issueCardContent{links: invalid})
-		if err != nil || strings.Contains(empty, "关键产物") {
+		if err != nil || strings.Contains(empty, "相关资料") {
 			t.Fatalf("no valid links must omit the artifact section: %s (%v)", empty, err)
 		}
 	}

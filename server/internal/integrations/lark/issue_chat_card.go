@@ -72,7 +72,7 @@ func marshalIssueCard(content issueCardContent) (string, error) {
 	}
 	links := issueCardArtifactLinks(content.links)
 	if len(links) > 0 {
-		rows := []any{map[string]any{"tag": "markdown", "content": "**关键产物**"}}
+		rows := []any{map[string]any{"tag": "markdown", "content": "**相关资料**"}}
 		for i := 0; i < len(links); i += 2 {
 			columns := []any{map[string]any{"tag": "markdown", "content": issueCardMarkdownLink(links[i])}}
 			if i+1 < len(links) {
@@ -167,16 +167,18 @@ func issueCardArtifactLabel(label string) (string, int) {
 	switch strings.ToLower(strings.TrimSpace(label)) {
 	case "prd":
 		return "需求文档 · PRD", 0
+	case "techdesign":
+		return "技术方案", 1
 	case "meego":
-		return "需求详情 · Meego", 1
+		return "需求详情 · Meego", 2
 	case "bits":
-		return "开发任务 · Bits", 2
+		return "开发任务 · Bits", 3
 	case "mr":
-		return "代码变更 · MR", 3
+		return "代码变更 · MR", 4
 	case "ppe":
-		return "PPE 环境", 4
+		return "PPE 环境", 5
 	default:
-		return label, 5
+		return label, 6
 	}
 }
 
