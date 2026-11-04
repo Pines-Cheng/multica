@@ -21,6 +21,10 @@ SELECT * FROM channel_issue_chat
 WHERE issue_id = sqlc.arg('issue_id')
   AND channel_type = sqlc.arg('channel_type');
 
+-- name: SetChannelIssueArtifactTabs :exec
+UPDATE channel_issue_chat SET artifact_tabs = sqlc.arg('artifact_tabs')
+WHERE id = sqlc.arg('id') AND workspace_id = sqlc.arg('workspace_id');
+
 -- name: SetChannelIssueChatSteward :exec
 -- Hands every binding of one chat (its root issue and sub-issue topics) to
 -- a new steward installation.

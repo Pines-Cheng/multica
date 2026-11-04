@@ -1045,7 +1045,7 @@ export function useRealtimeSync(
     // Event types handled by specific handlers below -- skip generic refresh
     const specificEvents = new Set([
       "workspace:updated",
-      "issue:updated", "issue:created", "issue:deleted", "issue_attachments:changed", "issue_labels:changed", "issue_metadata:changed", "issue_properties:changed", "property:created", "property:updated", "inbox:new",
+      "issue:updated", "issue:created", "issue:deleted", "issue_attachments:changed", "issue_labels:changed", "issue_metadata:changed", "issue_artifacts:changed", "issue_properties:changed", "property:created", "property:updated", "inbox:new",
       "comment:created", "comment:updated", "comment:deleted",
       "comment:resolved", "comment:unresolved",
       "activity:created",
@@ -1145,6 +1145,14 @@ export function useRealtimeSync(
       if (!issue_id) return;
       const wsId = getCurrentWsId();
       if (wsId) onIssueMetadataChanged(qc, wsId, issue_id, metadata ?? {}, issue_revision);
+    });
+
+    const unsubIssueArtifactsChanged = ws.on("issue_artifacts:changed", (p) => {
+      const { issue_id, issue_revision } = p as { issue_id: string; issue_revision?: number };
+      const wsId = getCurrentWsId();
+      if (!issue_id || !wsId) return;
+      qc.invalidateQueries({ queryKey: issueKeys.artifacts(wsId, issue_id) });
+      onIssueAuxiliaryRevision(qc, wsId, issue_id, issue_revision);
     });
 
     const unsubIssuePropertiesChanged = ws.on("issue_properties:changed", (p) => {
@@ -1827,6 +1835,7 @@ export function useRealtimeSync(
       unsubIssueAttachmentsChanged();
       unsubIssueLabelsChanged();
       unsubIssueMetadataChanged();
+      unsubIssueArtifactsChanged();
       unsubIssuePropertiesChanged();
       unsubPropertyChanged.forEach((unsub) => unsub());
       unsubInboxNew();

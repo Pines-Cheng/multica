@@ -3,7 +3,7 @@ package lark
 import (
 	"context"
 	"errors"
-	"reflect"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -30,6 +30,7 @@ type fakeChats struct {
 		tabs   []ChatURLTab
 	}
 	tabSyncErr error
+	tabSerial  int
 	pinned     []string
 }
 
@@ -50,6 +51,14 @@ func (f *fakeChats) AddChatURLTab(_ context.Context, _ InstallationCredentials, 
 func (f *fakeChats) SyncChatURLTabs(_ context.Context, creds InstallationCredentials, chatID ChatID, tabs []ChatURLTab) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.tabSyncErr == nil {
+		for i := range tabs {
+			if tabs[i].ID == "" {
+				f.tabSerial++
+				tabs[i].ID = fmt.Sprintf("artifact-tab-%d", f.tabSerial)
+			}
+		}
+	}
 	f.syncedTabs = append(f.syncedTabs, struct {
 		chatID ChatID
 		appID  string
@@ -63,7 +72,7 @@ func TestIssueChatTabs_IsolatesRootArtifactsAndKeepsCardsOnFailure(t *testing.T)
 	f.svc.cfg.AppURL = "https://multica.example"
 	root := f.fx.Issue(t, "Root", testutil.Cols{
 		"assignee_type": "squad", "assignee_id": f.squad,
-		"metadata": `{"PRD":"https://docs.example/root","note":"https://other.example"}`,
+		"metadata": `{"PRD":"https://docs.example/root","note":"plain text"}`,
 	})
 	f.chats.tabSyncErr = errors.New("tab permission denied")
 	f.publishIssue(protocol.EventIssueCreated, root, nil)
@@ -74,7 +83,7 @@ func TestIssueChatTabs_IsolatesRootArtifactsAndKeepsCardsOnFailure(t *testing.T)
 	assertTabs := func(chatID string, url string) {
 		t.Helper()
 		last := f.chats.syncedTabs[len(f.chats.syncedTabs)-1]
-		if string(last.chatID) != chatID || !reflect.DeepEqual(last.tabs, []ChatURLTab{{Name: "PRD", URL: url}}) {
+		if string(last.chatID) != chatID || (len(last.tabs) != 1 || last.tabs[0].Name != "PRD" || last.tabs[0].URL != url) {
 			t.Fatalf("wrong task's artifacts: %+v", last)
 		}
 	}
@@ -87,7 +96,7 @@ func TestIssueChatTabs_IsolatesRootArtifactsAndKeepsCardsOnFailure(t *testing.T)
 	f.publishIssue(protocol.EventIssueCreated, child, nil)
 	f.bus.Publish(events.Event{Type: protocol.EventIssueMetadataChanged, WorkspaceID: f.ws, Payload: map[string]any{"issue_id": child}})
 	assertTabs(binding.ChatID, "https://docs.example/root")
-	if card := f.progressCard(t, root); !strings.Contains(card, "[需求文档 · PRD](https://docs.example/root)") || !strings.Contains(card, "查看任务") {
+	if card := f.progressCard(t, root); !strings.Contains(card, "[PRD](https://docs.example/root)") || !strings.Contains(card, "查看任务") {
 		t.Fatalf("tab failure lost card information or navigation: %s", card)
 	}
 
@@ -282,7 +291,7 @@ func TestIssueChatP1_SubIssueBecomesTopicAndThreadsItsTimeline(t *testing.T) {
 	f.fx.Exec(t, `UPDATE issue SET metadata = '{"Meego":"https://meego.example/story/1","note":"not-a-document-link"}' WHERE id = $1`, parent)
 	f.bus.Publish(events.Event{Type: protocol.EventIssueMetadataChanged, WorkspaceID: f.ws, Payload: map[string]any{"issue_id": parent}})
 	progress = f.progressCard(t, parent)
-	if !strings.Contains(progress, "[需求详情 · Meego](https://meego.example/story/1)") || strings.Contains(progress, "not-a-document-link") {
+	if !strings.Contains(progress, "[Meego](https://meego.example/story/1)") || strings.Contains(progress, "not-a-document-link") {
 		t.Fatalf("progress card links = %s", progress)
 	}
 }

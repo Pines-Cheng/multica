@@ -417,6 +417,7 @@ type ChannelIssueChat struct {
 	CreatedBy             pgtype.UUID        `json:"created_by"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	ArtifactTabs          []byte             `json:"artifact_tabs"`
 }
 
 type ChannelIssueCommentPending struct {
@@ -917,6 +918,7 @@ type Issue struct {
 	LastActivityAt     pgtype.Timestamptz `json:"last_activity_at"`
 	TriageState        pgtype.Text        `json:"triage_state"`
 	DuplicateOfIssueID pgtype.UUID        `json:"duplicate_of_issue_id"`
+	Artifacts          []byte             `json:"artifacts"`
 }
 
 type IssueChildEvent struct {

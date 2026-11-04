@@ -4,12 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
-	"net/url"
-	"sort"
 	"strings"
+
+	"github.com/multica-ai/multica/server/internal/issueartifact"
 )
 
 type issueCardLink struct {
+	key   string
 	label string
 	url   string
 }
@@ -152,43 +153,15 @@ func issueCardArtifactLinks(links []issueCardLink) []issueCardLink {
 			ordered = append(ordered, link)
 		}
 	}
-	sort.SliceStable(ordered, func(i, j int) bool {
-		_, a := issueCardArtifactLabel(ordered[i].label)
-		_, b := issueCardArtifactLabel(ordered[j].label)
-		return a < b
-	})
-	for i := range ordered {
-		ordered[i].label, _ = issueCardArtifactLabel(ordered[i].label)
-	}
 	return ordered
 }
 
-func issueCardArtifactLabel(label string) (string, int) {
-	switch strings.ToLower(strings.TrimSpace(label)) {
-	case "prd":
-		return "需求文档 · PRD", 0
-	case "techdesign":
-		return "技术方案", 1
-	case "meego":
-		return "需求详情 · Meego", 2
-	case "bits":
-		return "开发任务 · Bits", 3
-	case "mr":
-		return "代码变更 · MR", 4
-	case "ppe":
-		return "PPE 环境", 5
-	default:
-		return label, 6
-	}
-}
-
 func validIssueCardURL(raw string) bool {
-	u, err := url.Parse(raw)
-	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Hostname() != "" && !strings.ContainsAny(raw, "\r\n\t ")
+	return issueartifact.ValidURL(raw)
 }
 
 func issueCardMarkdownLink(link issueCardLink) string {
-	label := strings.NewReplacer("[", "", "]", "", "\n", " ", "\r", " ").Replace(link.label)
+	label := issueCardMarkdownText(strings.NewReplacer("\n", " ", "\r", " ").Replace(link.label))
 	url := strings.NewReplacer("(", "%28", ")", "%29").Replace(link.url)
 	return fmt.Sprintf("[%s](%s)", label, url)
 }

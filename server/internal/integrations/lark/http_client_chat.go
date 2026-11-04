@@ -17,7 +17,8 @@ type ChatAdmin interface {
 	AddChatMembers(ctx context.Context, creds InstallationCredentials, p AddChatMembersParams) (invalid []string, err error)
 	// AddChatURLTab pins a URL as an in-app tab at the top of the chat.
 	AddChatURLTab(ctx context.Context, creds InstallationCredentials, chatID ChatID, name, url string) error
-	// SyncChatURLTabs adds missing URL tabs and updates changed tabs by name.
+	// SyncChatURLTabs updates only tabs whose IDs are supplied by the caller.
+	// It fills newly created IDs into tabs so ownership can be persisted.
 	SyncChatURLTabs(ctx context.Context, creds InstallationCredentials, chatID ChatID, tabs []ChatURLTab) error
 	// PinTopNotice pins a message to the top of the chat.
 	PinTopNotice(ctx context.Context, creds InstallationCredentials, chatID ChatID, messageID string) error
@@ -55,6 +56,8 @@ type AddChatMembersParams struct {
 }
 
 type ChatURLTab struct {
+	Key  string
+	ID   string
 	Name string
 	URL  string
 }

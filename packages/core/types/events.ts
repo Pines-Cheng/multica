@@ -76,6 +76,7 @@ export type WSEventType =
   | "label:deleted"
   | "issue_labels:changed"
   | "issue_metadata:changed"
+  | "issue_artifacts:changed"
   | "issue_properties:changed"
   | "property:created"
   | "property:updated"

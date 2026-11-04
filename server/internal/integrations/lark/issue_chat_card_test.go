@@ -107,7 +107,7 @@ func TestMetadataCardLinks_OnlyUsesExistingWebLinks(t *testing.T) {
 }
 
 func TestIssueCard_LightSectionsKeepProgressAndAllArtifactLinks(t *testing.T) {
-	links := metadataCardLinks([]byte(`{"Bits":"https://bits.example/task","MR":"https://code.example/mr","Meego":"https://meego.example/story","PPE":"https://ppe.example/?env=test"," prd ":"https://docs.example/spec(4)#section"," TechDesign ":"https://docs.example/design","自测报告":"https://tests.example/report"}`))
+	links := issueArtifactLinks([]byte(`{"Bits":"https://bits.example/task","MR":"https://code.example/mr","Meego":"https://meego.example/story","PPE":"https://ppe.example/?env=test"," prd ":"https://docs.example/spec(4)#section","TechDesign":"https://docs.example/design","自测报告":"https://tests.example/report"}`), []byte(`{"design":{"title":"技术方案","url":"https://docs.example/design","kind":"any-new-kind"}}`))
 	raw, err := marshalIssueCard(issueCardContent{
 		progress: []issueCardProgress{
 			{title: "[开发](https://multica.example/dev/issues/DEV-30)", status: "已完成", assignee: "Developer & Reviewer"},
@@ -137,7 +137,7 @@ func TestIssueCard_LightSectionsKeepProgressAndAllArtifactLinks(t *testing.T) {
 	if len(rows) != 5 || rows[0].Content != "**相关资料**" {
 		t.Fatalf("expected a heading and four rows: %+v", rows)
 	}
-	for i, label := range []string{"需求文档 · PRD", "技术方案", "需求详情 · Meego", "开发任务 · Bits", "代码变更 · MR", "PPE 环境", "自测报告"} {
+	for i, label := range []string{"技术方案", "prd", "Bits", "MR", "Meego", "PPE", "自测报告"} {
 		row := rows[1+i/2]
 		wantColumns := 2
 		if i == 6 {

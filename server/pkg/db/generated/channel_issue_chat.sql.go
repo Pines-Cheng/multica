@@ -43,7 +43,7 @@ INSERT INTO channel_issue_chat (
     $7, $8
 )
 ON CONFLICT (issue_id, channel_type) DO NOTHING
-RETURNING id, workspace_id, issue_id, root_issue_id, channel_type, chat_id, thread_root_message_id, steward_installation_id, status, created_by, created_at, updated_at
+RETURNING id, workspace_id, issue_id, root_issue_id, channel_type, chat_id, thread_root_message_id, steward_installation_id, status, created_by, created_at, updated_at, artifact_tabs
 `
 
 type CreateChannelIssueChatParams struct {
@@ -87,6 +87,7 @@ func (q *Queries) CreateChannelIssueChat(ctx context.Context, arg CreateChannelI
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ArtifactTabs,
 	)
 	return i, err
 }
@@ -169,7 +170,7 @@ func (q *Queries) GetActiveChannelInstallationByAgent(ctx context.Context, arg G
 }
 
 const getChannelIssueChatByIssue = `-- name: GetChannelIssueChatByIssue :one
-SELECT id, workspace_id, issue_id, root_issue_id, channel_type, chat_id, thread_root_message_id, steward_installation_id, status, created_by, created_at, updated_at FROM channel_issue_chat
+SELECT id, workspace_id, issue_id, root_issue_id, channel_type, chat_id, thread_root_message_id, steward_installation_id, status, created_by, created_at, updated_at, artifact_tabs FROM channel_issue_chat
 WHERE issue_id = $1
   AND channel_type = $2
 `
@@ -195,12 +196,13 @@ func (q *Queries) GetChannelIssueChatByIssue(ctx context.Context, arg GetChannel
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ArtifactTabs,
 	)
 	return i, err
 }
 
 const getChannelIssueChatByRoute = `-- name: GetChannelIssueChatByRoute :one
-SELECT id, workspace_id, issue_id, root_issue_id, channel_type, chat_id, thread_root_message_id, steward_installation_id, status, created_by, created_at, updated_at FROM channel_issue_chat
+SELECT id, workspace_id, issue_id, root_issue_id, channel_type, chat_id, thread_root_message_id, steward_installation_id, status, created_by, created_at, updated_at, artifact_tabs FROM channel_issue_chat
 WHERE channel_type = $1
   AND chat_id = $2
   AND thread_root_message_id = $3
@@ -231,6 +233,7 @@ func (q *Queries) GetChannelIssueChatByRoute(ctx context.Context, arg GetChannel
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ArtifactTabs,
 	)
 	return i, err
 }
@@ -485,6 +488,22 @@ func (q *Queries) RecordChannelIssueMessage(ctx context.Context, arg RecordChann
 		arg.CommentID,
 		arg.TaskID,
 	)
+	return err
+}
+
+const setChannelIssueArtifactTabs = `-- name: SetChannelIssueArtifactTabs :exec
+UPDATE channel_issue_chat SET artifact_tabs = $1
+WHERE id = $2 AND workspace_id = $3
+`
+
+type SetChannelIssueArtifactTabsParams struct {
+	ArtifactTabs []byte      `json:"artifact_tabs"`
+	ID           pgtype.UUID `json:"id"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) SetChannelIssueArtifactTabs(ctx context.Context, arg SetChannelIssueArtifactTabsParams) error {
+	_, err := q.db.Exec(ctx, setChannelIssueArtifactTabs, arg.ArtifactTabs, arg.ID, arg.WorkspaceID)
 	return err
 }
 

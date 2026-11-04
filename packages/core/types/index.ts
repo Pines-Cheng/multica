@@ -361,3 +361,4 @@ export type { IssueWakeup, IssueWakeupInput, SystemWakeup, WorkspaceSystemWakeup
 
 export type { WorkspaceWakeup, WorkspaceWakeupPage, WorkspaceWakeupFilters, WakeupScope } from "./issue-wakeup";
 export type { IssueChannelChat, IssueChannelChatEntry } from "./issue-channel-chat";
+export type { IssueArtifact, IssueArtifactInput, IssueArtifactsResponse } from "./issue-artifact";

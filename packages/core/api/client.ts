@@ -1,4 +1,6 @@
 import type { ZodType } from "zod";
+import type { IssueArtifactInput, IssueArtifactsResponse } from "../types/issue-artifact";
+import { IssueArtifactsResponseSchema } from "./schemas";
 import { AgentRuntimeSchema, EMPTY_RUNTIME } from "../runtimes/schema";
 import type { IssueWakeup, IssueWakeupInput, IssueWakeupSummaryRow, PausedWakeup, SystemWakeup, WakeupRun, WorkspaceSystemWakeup } from "../types/issue-wakeup";
 import type { WorkspaceWakeupPage, WorkspaceWakeupFilters } from "../types/issue-wakeup";
@@ -1350,6 +1352,28 @@ export class ApiClient {
     return parseWithFallback<IssueChannelChat>(raw, IssueChannelChatSchema, EMPTY_ISSUE_CHANNEL_CHAT, {
       endpoint: "GET /api/issues/:id/channel-chat",
     });
+  }
+
+  async listIssueArtifacts(issueId: string): Promise<IssueArtifactsResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/artifacts`);
+    return parseWithFallback<IssueArtifactsResponse>(raw, IssueArtifactsResponseSchema, { artifacts: [] }, {
+      endpoint: "GET /api/issues/:id/artifacts",
+    });
+  }
+
+  async setIssueArtifact(issueId: string, key: string, artifact: IssueArtifactInput): Promise<IssueArtifactsResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/artifacts/${encodeURIComponent(key)}`, {
+      method: "PUT", body: JSON.stringify(artifact),
+    });
+    const parsed = parseWithFallback<IssueArtifactsResponse | null>(raw, IssueArtifactsResponseSchema, null, {
+      endpoint: "PUT /api/issues/:id/artifacts/:key",
+    });
+    if (!parsed?.artifacts.some((item) => item.key === key)) throw new Error("Could not save the issue artifact");
+    return parsed;
+  }
+
+  async deleteIssueArtifact(issueId: string, key: string): Promise<void> {
+    await this.fetch(`/api/issues/${encodeURIComponent(issueId)}/artifacts/${encodeURIComponent(key)}`, { method: "DELETE" });
   }
 
   async createIssueChannelChat(issueId: string): Promise<IssueChannelChat> {

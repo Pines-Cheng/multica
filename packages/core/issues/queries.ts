@@ -31,6 +31,14 @@ export function issueTasksOptions(issueId: string) {
   });
 }
 
+export function issueArtifactsOptions(wsId: string, issueId: string) {
+  return queryOptions({
+    queryKey: issueKeys.artifacts(wsId, issueId),
+    queryFn: () => api.listIssueArtifacts(issueId),
+    enabled: !!wsId && !!issueId,
+  });
+}
+
 export interface IssueSortParam {
   sort_by?: ListIssuesParams["sort_by"];
   sort_direction?: ListIssuesParams["sort_direction"];
@@ -45,6 +53,7 @@ export interface IssueSortParam {
 
 export const issueKeys = {
   all: (wsId: string) => ["issues", wsId] as const,
+  artifacts: (wsId: string, issueId: string) => [...issueKeys.all(wsId), "artifacts", issueId] as const,
   /** PREFIX for invalidation — no sort. */
   list: (wsId: string) => [...issueKeys.all(wsId), "list"] as const,
   /** FULL KEY for queryOptions — includes sort. */

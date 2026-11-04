@@ -40,7 +40,7 @@ func TestIssueChatOverview_ExplainsContentsAndReflectsCurrentWork(t *testing.T) 
 	for _, element := range card.Body.Elements {
 		body += cardMarkdown(element)
 	}
-	if !strings.Contains(body, "[需求文档 · PRD](https://docs.example/spec)") {
+	if !strings.Contains(body, "[PRD](https://docs.example/spec)") {
 		t.Fatalf("overview lost its artifact links: %s", body)
 	}
 

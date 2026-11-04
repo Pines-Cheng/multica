@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"testing"
@@ -68,6 +69,7 @@ func TestHTTPClient_SyncChatURLTabs(t *testing.T) {
 		{"tab_id": "manual-prd", "tab_name": "PRD", "tab_type": "doc"},
 	}
 	reads, writes := 0, 0
+	wantUpdates := []string{"MR", "PPE"}
 	fake.mux.HandleFunc(path+"/list_tabs", func(w http.ResponseWriter, r *http.Request) {
 		reads++
 		if r.Method != http.MethodGet {
@@ -113,22 +115,22 @@ func TestHTTPClient_SyncChatURLTabs(t *testing.T) {
 					}
 				}
 			}
-			want := []string{"Bits", "Meego"}
+			want := []string{"Bits", "Meego", "PRD (2)"}
 			if r.URL.Path == path+"/update_tabs" {
-				want = []string{"MR", "PPE"}
+				want = wantUpdates
 			}
 			if !reflect.DeepEqual(names, want) {
 				t.Errorf("write %s names = %v, want %v", r.URL.Path, names, want)
 			}
-			writeJSON(w, map[string]any{"code": 0})
+			writeJSON(w, map[string]any{"code": 0, "data": map[string]any{"chat_tabs": body.Tabs}})
 		})
 	}
 	client := newTestClient(fake, time.Now)
 	tabs := []ChatURLTab{
 		{Name: "Bits", URL: "https://bits.example/task/1"},
-		{Name: "MR", URL: "https://code.example/new"},
+		{ID: "mr", Name: "MR", URL: "https://code.example/new"},
 		{Name: "Meego", URL: "https://meego.example/1"},
-		{Name: "PPE", URL: "https://ppe.example"},
+		{ID: "ppe", Name: "PPE", URL: "https://ppe.example"},
 		{Name: "PRD", URL: "https://docs.example/spec"},
 	}
 	for i := 0; i < 2; i++ {
@@ -136,13 +138,25 @@ func TestHTTPClient_SyncChatURLTabs(t *testing.T) {
 			t.Fatalf("sync: %v", err)
 		}
 	}
-	if reads != 2 || writes != 2 || len(existing) != 7 {
+	if reads != 2 || writes != 2 || len(existing) != 8 {
 		t.Fatalf("repeat sync must not write or add duplicates: reads=%d writes=%d tabs=%+v", reads, writes, existing)
 	}
 	if existing[0]["tab_id"] != "task" || existing[3]["tab_id"] != "notes" || existing[4]["tab_type"] != "doc" {
 		t.Fatalf("unrelated and manual document tabs changed: %+v", existing)
 	}
-	if got := existing[1]["tab_content"].(map[string]any)["url"]; got != "https://code.example/new" {
+	wantUpdates = []string{"代码变更"}
+	tabs[1].Name = "代码变更"
+	tabs[1].URL = "https://code.example/renamed"
+	if err := client.SyncChatURLTabs(context.Background(), testCreds(), "oc_issue", tabs); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 3 || len(existing) != 8 || existing[1]["tab_name"] != "代码变更" {
+		t.Fatalf("renaming must update the owned tab by ID: %+v", existing)
+	}
+	if tabs[0].ID == "" || tabs[2].ID == "" || tabs[4].ID == "" {
+		t.Fatalf("new tab IDs must be returned: %+v", tabs)
+	}
+	if got := existing[1]["tab_content"].(map[string]any)["url"]; got != "https://code.example/renamed" {
 		t.Fatalf("MR URL = %v", got)
 	}
 }
@@ -172,7 +186,11 @@ func TestHTTPClient_SyncChatURLTabs_APIErrors(t *testing.T) {
 				})
 			}
 			client := newTestClient(fake, time.Now)
-			err := client.SyncChatURLTabs(context.Background(), testCreds(), "oc_issue", []ChatURLTab{{Name: "PRD", URL: "https://docs.example/spec"}})
+			want := ChatURLTab{Name: "PRD", URL: "https://docs.example/spec"}
+			if stage == "update" {
+				want.ID = "prd"
+			}
+			err := client.SyncChatURLTabs(context.Background(), testCreds(), "oc_issue", []ChatURLTab{want})
 			var apiErr *APIError
 			if !errors.As(err, &apiErr) {
 				t.Fatalf("error = %v, want APIError", err)
@@ -181,5 +199,86 @@ func TestHTTPClient_SyncChatURLTabs_APIErrors(t *testing.T) {
 				t.Fatal("must not create tabs when listing is denied")
 			}
 		})
+	}
+}
+
+func TestHTTPClient_SyncChatURLTabs_PreservesCustomTabCapacity(t *testing.T) {
+	fake := newLarkFake(t)
+	fake.stubToken("tok_chat_tab", 7200)
+	const path = "/open-apis/im/v1/chats/oc_issue/chat_tabs"
+	existing := []map[string]any{{"tab_id": "messages", "tab_type": "message"}}
+	for i := 0; i < 20; i++ {
+		existing = append(existing, map[string]any{"tab_id": fmt.Sprint(i), "tab_name": fmt.Sprintf("Manual %d", i), "tab_type": "url", "tab_content": map[string]string{"url": "https://docs.example/old"}})
+	}
+	fake.mux.HandleFunc(path+"/list_tabs", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"code": 0, "data": map[string]any{"chat_tabs": existing}})
+	})
+	updated := false
+	fake.mux.HandleFunc(path+"/update_tabs", func(w http.ResponseWriter, r *http.Request) {
+		updated = true
+		var body struct {
+			Tabs []chatTab `json:"chat_tabs"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if len(body.Tabs) != 1 || body.Tabs[0].ID != "0" || body.Tabs[0].Content.URL != "https://docs.example/new" {
+			t.Errorf("must still update an existing link: %+v", body.Tabs)
+		}
+		writeJSON(w, map[string]any{"code": 0})
+	})
+	fake.mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("must not create beyond the custom-tab limit")
+		writeJSON(w, map[string]any{"code": 232001})
+	})
+	client := newTestClient(fake, time.Now)
+	if err := client.SyncChatURLTabs(context.Background(), testCreds(), "oc_issue", []ChatURLTab{
+		{Name: "New kind", URL: "https://docs.example/new-kind"},
+		{ID: "0", Name: "Manual 0", URL: "https://docs.example/new"},
+	}); err != nil || !updated {
+		t.Fatalf("sync error=%v; updated=%v", err, updated)
+	}
+}
+
+func TestHTTPClient_SyncChatURLTabs_DoesNotAdoptManualURLTabs(t *testing.T) {
+	fake := newLarkFake(t)
+	fake.stubToken("tok_chat_tab", 7200)
+	const path = "/open-apis/im/v1/chats/oc_issue/chat_tabs"
+	manual := chatTab{ID: "manual", Name: "Report", Type: "url"}
+	manual.Content.URL = "https://docs.example/report"
+	manual.Config.IsBuiltIn = true
+	existing := []chatTab{manual}
+	creates := 0
+	fake.mux.HandleFunc(path+"/list_tabs", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"code": 0, "data": map[string]any{"chat_tabs": existing}})
+	})
+	fake.mux.HandleFunc(path+"/update_tabs", func(w http.ResponseWriter, r *http.Request) {
+		t.Error("manual tab must not be updated or adopted")
+		writeJSON(w, map[string]any{"code": 0})
+	})
+	fake.mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		creates++
+		var body struct {
+			Tabs []chatTab `json:"chat_tabs"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if len(body.Tabs) != 1 || body.Tabs[0].Name != "Report (2)" {
+			t.Errorf("name collision must be resolved without changing the manual tab: %+v", body.Tabs)
+		}
+		body.Tabs[0].ID = "owned"
+		existing = append(existing, body.Tabs...)
+		writeJSON(w, map[string]any{"code": 0, "data": map[string]any{"chat_tabs": body.Tabs}})
+	})
+	tabs := []ChatURLTab{{Key: "report", Name: "Report", URL: manual.Content.URL}}
+	client := newTestClient(fake, time.Now)
+	for range 2 {
+		if err := client.SyncChatURLTabs(context.Background(), testCreds(), "oc_issue", tabs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if creates != 1 || tabs[0].ID != "owned" || existing[0] != manual {
+		t.Fatalf("ownership/idempotency failed: creates=%d; tabs=%+v; existing=%+v", creates, tabs, existing)
 	}
 }

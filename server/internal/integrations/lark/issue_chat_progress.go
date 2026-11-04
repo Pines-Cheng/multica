@@ -16,6 +16,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
+	"github.com/multica-ai/multica/server/internal/issueartifact"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -64,7 +65,7 @@ func (s *IssueChatService) progressCardJSON(ctx context.Context, issue db.Issue,
 	content := issueCardContent{
 		title: issue.Title, subtitle: strings.Join(subtitle, " · "),
 		summary: cardSummary("", label+" · "+strings.TrimSpace(identifier+" "+issue.Title)), template: template,
-		action: issueCardLink{label: "查看任务", url: link}, links: metadataCardLinks(issue.Metadata),
+		action: issueCardLink{label: "查看任务", url: link}, links: issueArtifactLinks(issue.Metadata, issue.Artifacts),
 	}
 	needsAssistance := false
 	if !topic {
@@ -191,9 +192,7 @@ func childLabel(c db.Issue) string {
 	return oneLine(title, 40)
 }
 
-// metadataCardLinks lists the issue's metadata entries whose value is a web
-// link, so an agent can surface Meego, PRD, MR and test links on the card by
-// setting issue metadata.
+// metadataCardLinks lists metadata web links without interpreting key names.
 func metadataCardLinks(raw []byte) []issueCardLink {
 	var meta map[string]any
 	if len(raw) == 0 || json.Unmarshal(raw, &meta) != nil {
@@ -208,7 +207,29 @@ func metadataCardLinks(raw []byte) []issueCardLink {
 	sort.Strings(keys)
 	links := make([]issueCardLink, 0, len(keys))
 	for _, k := range keys {
-		links = append(links, issueCardLink{label: k, url: meta[k].(string)})
+		links = append(links, issueCardLink{key: "metadata:" + k, label: strings.TrimSpace(k), url: meta[k].(string)})
+	}
+	return links
+}
+
+// Explicitly titled artifacts precede metadata links and replace matching
+// keys. A shared URL appears once, using its declared title.
+func issueArtifactLinks(metadata, artifacts []byte) []issueCardLink {
+	var links []issueCardLink
+	seen := make(map[string]bool)
+	declaredKeys := make(map[string]bool)
+	for _, artifact := range issueartifact.Records(artifacts) {
+		declaredKeys[artifact.Key] = true
+		if !seen[artifact.URL] {
+			seen[artifact.URL] = true
+			links = append(links, issueCardLink{key: "artifact:" + artifact.Key, label: artifact.Title, url: artifact.URL})
+		}
+	}
+	for _, link := range metadataCardLinks(metadata) {
+		if !seen[link.url] && !declaredKeys[strings.TrimPrefix(link.key, "metadata:")] {
+			seen[link.url] = true
+			links = append(links, link)
+		}
 	}
 	return links
 }

@@ -97,6 +97,16 @@ import type {
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { CreateFeedbackResponse } from "../feedback/types";
 
+export const IssueArtifactsResponseSchema = z.object({
+  artifacts: z.array(z.object({
+    key: z.string().min(1),
+    title: z.string().min(1),
+    url: z.string().url().refine((value) => /^https?:\/\//.test(value)),
+    kind: z.string().catch(""),
+  })).default([]),
+  issue_revision: z.number().optional(),
+});
+
 export const PluginConfigFieldSchema = z.object({
   key: z.string(),
   type: z.string().default("string"),
