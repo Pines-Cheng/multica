@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/channelmedia"
 	"github.com/multica-ai/multica/server/internal/dispatch"
+	"github.com/multica-ai/multica/server/internal/integrations/lark"
 	"github.com/multica-ai/multica/server/internal/issueguard"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/issueworkflow"
@@ -3064,6 +3065,24 @@ type CreateIssueRequest struct {
 	OriginID   *string `json:"origin_id,omitempty"`
 
 	AllowDuplicate bool `json:"allow_duplicate,omitempty"`
+	// ChannelChatID binds an existing Feishu group (oc_...) as the issue's
+	// chat instead of opening a new one. The issue is created even when the
+	// binding fails; the response then carries channel_chat_error and the
+	// binding can be retried through POST /api/issues/{id}/channel-chat.
+	ChannelChatID string `json:"channel_chat_id,omitempty"`
+}
+
+// CreateIssueResponse is the created issue plus the outcome of binding the
+// requested channel_chat_id, when one was given.
+type CreateIssueResponse struct {
+	IssueResponse
+	ChannelChat      *IssueChannelChatEntry `json:"channel_chat,omitempty"`
+	ChannelChatError *ChannelChatBindError  `json:"channel_chat_error,omitempty"`
+}
+
+type ChannelChatBindError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // UnmarshalJSON rejects duplicate object members before Go's ordinary map
@@ -3200,6 +3219,10 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	if req.Title == "" {
 		writeError(w, http.StatusBadRequest, "title is required")
+		return
+	}
+	if req.ChannelChatID != "" && !validFeishuChatID(req.ChannelChatID) {
+		writeErrorCode(w, http.StatusBadRequest, "invalid_chat_id", "channel_chat_id must be a Feishu chat id (oc_...)")
 		return
 	}
 
@@ -3489,6 +3512,9 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 			// issue_labels:changed broadcast is gone.
 			labelResponses := labelsToResponse(labels)
 			payload.Labels = &labelResponses
+			if req.ChannelChatID != "" && h.LarkIssueChat != nil {
+				return map[string]any{"issue": payload, lark.IssueEventBindsChat: true}
+			}
 			return map[string]any{"issue": payload}
 		},
 	})
@@ -3544,7 +3570,35 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	// understood label_ids and skip its legacy post-create attach fallback.
 	labelResponses := labelsToResponse(res.Labels)
 	resp.Labels = &labelResponses
-	writeJSON(w, http.StatusCreated, resp)
+	if req.ChannelChatID == "" {
+		writeJSON(w, http.StatusCreated, resp)
+		return
+	}
+	writeJSON(w, http.StatusCreated, h.bindCreatedIssueChat(r, issue, parseUUID(creatorID), req.ChannelChatID, resp))
+}
+
+// bindCreatedIssueChat binds the chat a create asked for. A failure is
+// reported next to the issue rather than failing the create.
+func (h *Handler) bindCreatedIssueChat(r *http.Request, issue db.Issue, actor pgtype.UUID, chatID string, issueResp IssueResponse) CreateIssueResponse {
+	out := CreateIssueResponse{IssueResponse: issueResp}
+	if h.LarkIssueChat == nil {
+		out.ChannelChatError = &ChannelChatBindError{Code: "lark_not_configured", Message: "feishu integration is not configured"}
+		return out
+	}
+	chat, err := h.LarkIssueChat.BindChat(r.Context(), lark.BindIssueChatParams{
+		WorkspaceID: issue.WorkspaceID, IssueID: issue.ID, ActorUserID: actor, ChatID: chatID,
+	})
+	if err != nil {
+		_, code, msg := issueChannelChatError(err)
+		if code == "" {
+			slog.Warn("bind created issue chat failed", append(logger.RequestAttrs(r), "error", err, "issue_id", uuidToString(issue.ID))...)
+			code = "bind_failed"
+		}
+		out.ChannelChatError = &ChannelChatBindError{Code: code, Message: msg}
+		return out
+	}
+	out.ChannelChat = issueChannelChatEntry(chat)
+	return out
 }
 
 type UpdateIssueRequest struct {

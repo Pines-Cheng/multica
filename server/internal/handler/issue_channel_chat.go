@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -160,11 +162,27 @@ func (h *Handler) GetIssueChannelChat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// CreateIssueChannelChat — POST /api/issues/{id}/channel-chat. Idempotent:
-// an issue that already has a chat returns it.
+// CreateIssueChannelChatRequest optionally names an existing chat to bind
+// instead of creating one.
+type CreateIssueChannelChatRequest struct {
+	ChatID string `json:"chat_id"`
+}
+
+// CreateIssueChannelChat — POST /api/issues/{id}/channel-chat. Without a
+// body it creates the issue's chat; with {"chat_id": "oc_..."} it binds that
+// existing chat. Idempotent: an issue that already has the chat returns it.
 func (h *Handler) CreateIssueChannelChat(w http.ResponseWriter, r *http.Request) {
 	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
 	if !ok {
+		return
+	}
+	var req CreateIssueChannelChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.ChatID != "" && !validFeishuChatID(req.ChatID) {
+		writeErrorCode(w, http.StatusBadRequest, "invalid_chat_id", "chat_id must be a Feishu chat id (oc_...)")
 		return
 	}
 	if h.LarkIssueChat == nil {
@@ -175,29 +193,60 @@ func (h *Handler) CreateIssueChannelChat(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	chat, err := h.LarkIssueChat.EnsureChat(r.Context(), lark.EnsureIssueChatParams{
-		WorkspaceID: issue.WorkspaceID,
-		IssueID:     issue.ID,
-		ActorUserID: parseUUID(userID),
-	})
-	switch {
-	case errors.Is(err, lark.ErrIssueChatUnavailable):
-		writeFeatureDisabled(w, "lark_chat_unavailable", "feishu chat management is not available")
-		return
-	case errors.Is(err, lark.ErrIssueChatNoSteward):
-		writeErrorCode(w, http.StatusConflict, "no_steward_bot", "the issue's squad leader or assignee agent has no connected Feishu bot")
-		return
-	case err != nil:
-		var apiErr *lark.APIError
-		if errors.As(err, &apiErr) {
-			writeErrorCode(w, http.StatusBadGateway, "lark_api_error", apiErr.Error())
+	chat, err := h.openIssueChannelChat(r.Context(), issue, parseUUID(userID), req.ChatID)
+	if err != nil {
+		status, code, msg := issueChannelChatError(err)
+		if code == "" {
+			slog.Warn("create issue channel chat failed", append(logger.RequestAttrs(r), "error", err, "issue_id", uuidToString(issue.ID))...)
+			writeError(w, status, msg)
 			return
 		}
-		slog.Warn("create issue channel chat failed", append(logger.RequestAttrs(r), "error", err, "issue_id", uuidToString(issue.ID))...)
-		writeError(w, http.StatusInternalServerError, "failed to create issue chat")
+		writeErrorCode(w, status, code, msg)
 		return
 	}
 	writeJSON(w, http.StatusOK, IssueChannelChatResponse{Available: true, Chat: issueChannelChatEntry(chat)})
+}
+
+// openIssueChannelChat binds chatID when given, else creates the issue's chat.
+func (h *Handler) openIssueChannelChat(ctx context.Context, issue db.Issue, actor pgtype.UUID, chatID string) (lark.IssueChat, error) {
+	if chatID != "" {
+		return h.LarkIssueChat.BindChat(ctx, lark.BindIssueChatParams{
+			WorkspaceID: issue.WorkspaceID, IssueID: issue.ID, ActorUserID: actor, ChatID: chatID,
+		})
+	}
+	return h.LarkIssueChat.EnsureChat(ctx, lark.EnsureIssueChatParams{
+		WorkspaceID: issue.WorkspaceID, IssueID: issue.ID, ActorUserID: actor,
+	})
+}
+
+// validFeishuChatID accepts Lark group chat ids.
+func validFeishuChatID(chatID string) bool {
+	return strings.HasPrefix(chatID, "oc_") && len(chatID) > len("oc_") && len(chatID) <= 128
+}
+
+// issueChannelChatError maps a chat open/bind failure to an HTTP status and
+// a stable code. An empty code is an unexpected failure.
+func issueChannelChatError(err error) (int, string, string) {
+	var apiErr *lark.APIError
+	switch {
+	case errors.Is(err, lark.ErrIssueChatUnavailable):
+		return http.StatusForbidden, "lark_chat_unavailable", "feishu chat management is not available"
+	case errors.Is(err, lark.ErrIssueChatNoSteward):
+		return http.StatusConflict, "no_steward_bot", "the issue's squad leader or assignee agent has no connected Feishu bot"
+	case errors.Is(err, lark.ErrIssueChatIssueBound):
+		return http.StatusConflict, "issue_chat_already_bound", "the issue is already bound to another chat"
+	case errors.Is(err, lark.ErrIssueChatTaken):
+		return http.StatusConflict, "chat_already_bound", "the chat is already bound to another issue"
+	case errors.Is(err, lark.ErrIssueChatBotNotInChat):
+		return http.StatusConflict, "steward_bot_not_in_chat", "add the issue's steward bot (squad leader or assignee agent) to the chat first"
+	case errors.Is(err, lark.ErrIssueChatExternal):
+		return http.StatusUnprocessableEntity, "external_chat_unsupported", "external chats cannot be bound to an issue"
+	case errors.Is(err, lark.ErrChatNotFound):
+		return http.StatusNotFound, "chat_not_found", "the Feishu chat does not exist"
+	case errors.As(err, &apiErr):
+		return http.StatusBadGateway, "lark_api_error", apiErr.Error()
+	}
+	return http.StatusInternalServerError, "", "failed to create issue chat"
 }
 
 func bindChannelIssueAttachments(ctx context.Context, q *db.Queries, p lark.ChannelIssueCommentParams, created *db.CreateCommentRow) error {

@@ -32,6 +32,17 @@ type fakeChats struct {
 	tabSyncErr error
 	tabSerial  int
 	pinned     []string
+	// infos overrides what GetChatInfo reports; unlisted chats have the bot.
+	infos map[ChatID]ChatInfo
+}
+
+func (f *fakeChats) GetChatInfo(_ context.Context, _ InstallationCredentials, chatID ChatID) (ChatInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if info, ok := f.infos[chatID]; ok {
+		return info, nil
+	}
+	return ChatInfo{BotInChat: true}, nil
 }
 
 func (f *fakeChats) CreateChat(_ context.Context, _ InstallationCredentials, p CreateChatParams) (ChatID, error) {
@@ -76,6 +87,7 @@ func TestIssueChatTabs_IsolatesRootArtifactsAndKeepsCardsOnFailure(t *testing.T)
 	})
 	f.chats.tabSyncErr = errors.New("tab permission denied")
 	f.publishIssue(protocol.EventIssueCreated, root, nil)
+	f.startRun(root)
 	binding, ok := f.binding(t, root)
 	if !ok || len(f.chats.syncedTabs) == 0 || len(f.chats.pinned) != 1 {
 		t.Fatal("tab failure must not prevent chat binding or the pinned card")
@@ -110,6 +122,7 @@ func TestIssueChatTabs_IsolatesRootArtifactsAndKeepsCardsOnFailure(t *testing.T)
 		"metadata": `{"PRD":"https://docs.example/independent"}`,
 	})
 	f.publishIssue(protocol.EventIssueCreated, other, nil)
+	f.startRun(other)
 	otherBinding, ok := f.binding(t, other)
 	if !ok || otherBinding.ChatID == binding.ChatID {
 		t.Fatal("independent tasks must have independent groups")
@@ -230,6 +243,15 @@ func (f *activityFixture) publishIssue(eventType, issueID string, extra map[stri
 	f.bus.Publish(events.Event{Type: eventType, WorkspaceID: f.ws, ActorType: "member", ActorID: f.user, Payload: payload})
 }
 
+// startRun reports a run of the leader on the issue, which completes its
+// chat with the task tab and the pinned progress card.
+func (f *activityFixture) startRun(issueID string) {
+	task := uuid.NewString()
+	f.bus.Publish(events.Event{Type: protocol.EventTaskRunning, WorkspaceID: f.ws, TaskID: task, Payload: map[string]any{
+		"task_id": task, "agent_id": f.leader, "issue_id": issueID,
+	}})
+}
+
 func (f *activityFixture) binding(t *testing.T, issueID string) (db.ChannelIssueChat, bool) {
 	t.Helper()
 	row, err := f.store.GetChannelIssueChatByIssue(context.Background(), db.GetChannelIssueChatByIssueParams{
@@ -261,6 +283,7 @@ func TestIssueChatP1_SubIssueBecomesTopicAndThreadsItsTimeline(t *testing.T) {
 	f := newActivityFixture(t)
 	parent := f.fx.Issue(t, "Parent", testutil.Cols{"assignee_type": "squad", "assignee_id": f.squad})
 	f.publishIssue(protocol.EventIssueCreated, parent, nil)
+	f.startRun(parent)
 	parentChat, ok := f.binding(t, parent)
 	if !ok {
 		t.Fatal("parent chat missing")
@@ -320,7 +343,12 @@ func (f *activityFixture) progressCard(t *testing.T, rootIssue string) string {
 			return unescapeCardJSON(t, f.api.patched[i].CardJSON)
 		}
 	}
-	t.Fatal("progress card was never refreshed")
+	for i, id := range f.api.ids {
+		if id == intro.ChannelMessageID {
+			return unescapeCardJSON(t, f.api.sent[i].CardJSON)
+		}
+	}
+	t.Fatal("progress card was never sent")
 	return ""
 }
 
@@ -329,6 +357,7 @@ func TestIssueChatCards_RefreshesTopicWithItsOriginalSender(t *testing.T) {
 	f.svc.cfg.AppURL = "https://multica.example"
 	parent := f.fx.Issue(t, "Parent", testutil.Cols{"assignee_type": "squad", "assignee_id": f.squad})
 	f.publishIssue(protocol.EventIssueCreated, parent, nil)
+	f.startRun(parent)
 	child := f.fx.Issue(t, "开发：Parent", testutil.Cols{"parent_issue_id": parent, "assignee_type": "agent", "assignee_id": f.leader})
 	f.publishIssue(protocol.EventIssueCreated, child, nil)
 	topic, ok := f.binding(t, child)
@@ -372,6 +401,7 @@ func TestIssueChatCards_RefreshesTopicTitleAndLinks(t *testing.T) {
 	f.svc.cfg.AppURL = "https://multica.example"
 	parent := f.fx.Issue(t, "Parent", testutil.Cols{"assignee_type": "squad", "assignee_id": f.squad})
 	f.publishIssue(protocol.EventIssueCreated, parent, nil)
+	f.startRun(parent)
 	child := f.fx.Issue(t, "开发：Parent", testutil.Cols{"parent_issue_id": parent})
 	f.publishIssue(protocol.EventIssueCreated, child, nil)
 	topic, ok := f.binding(t, child)
@@ -406,6 +436,7 @@ func TestIssueChatCards_KeepsStandaloneIdentityAndPendingOwner(t *testing.T) {
 	f.svc.cfg.AppURL = "https://multica.example"
 	parent := f.fx.Issue(t, "项目空间添加搜索功能", testutil.Cols{"assignee_type": "squad", "assignee_id": f.squad})
 	f.publishIssue(protocol.EventIssueCreated, parent, nil)
+	f.startRun(parent)
 	const title = "验收：项目空间添加搜索功能"
 	child := f.fx.Issue(t, title, testutil.Cols{"parent_issue_id": parent, "assignee_type": "member", "assignee_id": f.user})
 	f.publishIssue(protocol.EventIssueCreated, child, nil)
@@ -471,12 +502,13 @@ func TestIssueChatCards_DeliveryAndAttentionOnlyLinkToExistingPages(t *testing.T
 		"metadata": `{"体验地址":"https://preview.example/search","自测报告":"https://tests.example/report"}`,
 	})
 	f.publishIssue(protocol.EventIssueCreated, issueID, nil)
+	f.startRun(issueID)
 	issue, err := f.store.GetIssue(context.Background(), uuidFromString(t, issueID))
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, issueURL := f.svc.issueIdentity(context.Background(), issue)
-	cardJSON := f.api.patched[len(f.api.patched)-1].CardJSON
+	cardJSON := f.api.sent[len(f.api.sent)-1].CardJSON
 	delivery := decodeIssueCard(t, cardJSON)
 	if delivery.Header.Template != "orange" || !strings.Contains(cardJSON, "https://preview.example/search") || !strings.Contains(cardJSON, "https://tests.example/report") {
 		t.Fatalf("delivery card must show saved status and links: %s", cardJSON)
@@ -513,6 +545,7 @@ func TestIssueChatP1_ReassignmentHandsTheChatToTheNewSteward(t *testing.T) {
 	f := newActivityFixture(t)
 	issue := f.fx.Issue(t, "Handover", testutil.Cols{"assignee_type": "squad", "assignee_id": f.squad})
 	f.publishIssue(protocol.EventIssueCreated, issue, nil)
+	f.startRun(issue)
 	other := f.fx.Agent(t, "Other", f.fx.Runtime(t, "other-runtime"))
 	otherBot := f.installBot(t, other, "cli_p1_other")
 
@@ -543,6 +576,7 @@ func TestIssueChatP2_RunIsOneLiveCard(t *testing.T) {
 	f := newActivityFixture(t)
 	issue := f.fx.Issue(t, "Run card", testutil.Cols{"assignee_type": "squad", "assignee_id": f.squad})
 	f.publishIssue(protocol.EventIssueCreated, issue, nil)
+	f.startRun(issue)
 	task := uuid.NewString()
 	run := func(eventType string, extra map[string]any) {
 		payload := map[string]any{"task_id": task, "agent_id": f.leader, "issue_id": issue}
@@ -628,6 +662,7 @@ func TestIssueChatP2_ShortRunPostsNoCard(t *testing.T) {
 	f := newActivityFixture(t)
 	issue := f.fx.Issue(t, "Short run", testutil.Cols{"assignee_type": "squad", "assignee_id": f.squad})
 	f.publishIssue(protocol.EventIssueCreated, issue, nil)
+	f.startRun(issue)
 	task := uuid.NewString()
 	sent := len(f.api.sent)
 	for _, eventType := range []string{protocol.EventTaskRunning, protocol.EventTaskCompleted} {

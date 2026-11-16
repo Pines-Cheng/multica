@@ -38,11 +38,16 @@ func statusLabel(status string) string {
 	return status
 }
 
+// IssueEventBindsChat marks an issue:created payload whose creator binds an
+// existing chat right after the create, so no chat is opened for it here.
+const IssueEventBindsChat = "binds_channel_chat"
+
 // issueChange is what an issue event tells the chat sync.
 type issueChange struct {
 	created         bool
 	statusChanged   bool
 	assigneeChanged bool
+	bindsChat       bool
 	actorMember     pgtype.UUID
 	issueID         pgtype.UUID
 }
@@ -66,6 +71,7 @@ func issueChangeFromEvent(e events.Event) (issueChange, bool) {
 	c := issueChange{created: e.Type == protocol.EventIssueCreated, issueID: id}
 	c.statusChanged, _ = payload["status_changed"].(bool)
 	c.assigneeChanged, _ = payload["assignee_changed"].(bool)
+	c.bindsChat, _ = payload[IssueEventBindsChat].(bool)
 	titleChanged, _ := payload["title_changed"].(bool)
 	if e.ActorType == "member" {
 		if actor, err := util.ParseUUID(e.ActorID); err == nil {
@@ -103,7 +109,7 @@ func (s *IssueChatService) syncIssueChange(ctx context.Context, change issueChan
 	}
 	binding, err := s.cfg.Store.GetChannelIssueChatByIssue(ctx, db.GetChannelIssueChatByIssueParams{IssueID: issue.ID, ChannelType: channelTypeFeishu})
 	if errors.Is(err, pgx.ErrNoRows) {
-		if change.created || change.assigneeChanged {
+		if (change.created && !change.bindsChat) || change.assigneeChanged {
 			return s.autoCreate(ctx, issue, pgtype.UUID{}, change.actorMember)
 		}
 		return nil

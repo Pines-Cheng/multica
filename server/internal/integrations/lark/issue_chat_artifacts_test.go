@@ -17,6 +17,7 @@ func TestIssueChatArtifactsRefreshWithoutKindRulesOrRepinning(t *testing.T) {
 		"artifacts": `{"report":{"title":"压测报告","url":"https://docs.example/report","kind":"unregistered-kind-v9"}}`,
 	})
 	f.publishIssue(protocol.EventIssueCreated, root, nil)
+	f.startRun(root)
 	assertArtifact := func(title, url string) {
 		t.Helper()
 		last := f.chats.syncedTabs[len(f.chats.syncedTabs)-1]

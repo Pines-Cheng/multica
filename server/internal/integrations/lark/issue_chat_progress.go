@@ -274,7 +274,6 @@ func (s *IssueChatService) refreshBoundIssueCard(ctx context.Context, binding db
 		return nil
 	}
 	defer s.lock("progress:" + uuidString(binding.ID))()
-	defer s.syncArtifactTabs(ctx, binding)
 	topic := binding.RootIssueID != binding.IssueID
 	var card db.ChannelIssueMessage
 	var err error
@@ -283,12 +282,15 @@ func (s *IssueChatService) refreshBoundIssueCard(ctx context.Context, binding db
 	} else {
 		card, err = s.cfg.Store.GetChannelIssueIntroMessage(ctx, binding.ID)
 	}
+	// A root chat without its progress card has not started work yet
+	// (activateChat), so it gets no artifact tabs either.
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
+	defer s.syncArtifactTabs(ctx, binding)
 	issue, err := s.cfg.Store.GetIssue(ctx, binding.IssueID)
 	if err != nil {
 		return err

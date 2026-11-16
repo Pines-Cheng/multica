@@ -26,6 +26,7 @@ func TestIssueChatAssistance_CloseRefreshesBothCardsWithoutNewMessages(t *testin
 	f.svc.cfg.API = &assistanceTestAPI{f.api}
 	root := f.fx.Issue(t, "Parent", testutil.Cols{"assignee_type": "squad", "assignee_id": f.squad})
 	f.publishIssue(protocol.EventIssueCreated, root, nil)
+	f.startRun(root)
 	child := f.fx.Issue(t, "开发：Parent", testutil.Cols{"parent_issue_id": root})
 	f.publishIssue(protocol.EventIssueCreated, child, nil)
 	binding, ok := f.binding(t, child)

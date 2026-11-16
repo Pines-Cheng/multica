@@ -157,6 +157,15 @@ func (s *IssueChatService) handleRunEvent(e events.Event) {
 	switch ev.eventType {
 	case protocol.EventTaskRunning:
 		s.runs.start(ev)
+		if ev.issueID.Valid {
+			s.dispatch(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), issueChatSyncTimeout)
+				defer cancel()
+				if err := s.activateChat(ctx, ev.issueID); err != nil {
+					s.cfg.Logger.Warn("lark issue chat: activate chat failed", "issue_id", uuidString(ev.issueID), "error", err)
+				}
+			})
+		}
 		return
 	case protocol.EventTaskProgress:
 		if !s.runs.record(ev.taskID, "", time.Now()) {

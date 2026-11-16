@@ -22,7 +22,24 @@ type ChatAdmin interface {
 	SyncChatURLTabs(ctx context.Context, creds InstallationCredentials, chatID ChatID, tabs []ChatURLTab) error
 	// PinTopNotice pins a message to the top of the chat.
 	PinTopNotice(ctx context.Context, creds InstallationCredentials, chatID ChatID, messageID string) error
+	// GetChatInfo reads what binding an existing chat needs to know about it,
+	// as seen by the calling bot.
+	GetChatInfo(ctx context.Context, creds InstallationCredentials, chatID ChatID) (ChatInfo, error)
 }
+
+// ChatInfo is an existing chat as seen by one bot.
+type ChatInfo struct {
+	BotInChat bool
+	External  bool
+}
+
+// ErrChatNotFound: Lark does not know the chat id.
+var ErrChatNotFound = errors.New("lark: chat not found")
+
+const (
+	codeChatInvalidID     = 232006
+	codeChatOperatorNotIn = 232011
+)
 
 // Lark id types accepted by the chat endpoints.
 const (
@@ -194,6 +211,46 @@ func (c *httpAPIClient) PinTopNotice(ctx context.Context, creds InstallationCred
 		return &APIError{Op: "pin top notice", Code: resp.Code, Msg: resp.Msg}
 	}
 	return nil
+}
+
+// GetChatInfo calls GET /open-apis/im/v1/chats/{chat_id}. A bot outside the
+// chat is either refused with 232011 or given only the public fields (name,
+// avatar, member count, status), so a reply without chat_mode also means the
+// bot is not in the chat.
+func (c *httpAPIClient) GetChatInfo(ctx context.Context, creds InstallationCredentials, chatID ChatID) (ChatInfo, error) {
+	if chatID == "" {
+		return ChatInfo{}, errors.New("lark http client: get chat: missing chat_id")
+	}
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			ChatMode string `json:"chat_mode"`
+			External bool   `json:"external"`
+		} `json:"data"`
+	}
+	path := "/open-apis/im/v1/chats/" + url.PathEscape(string(chatID))
+	err := c.doAuthedJSON(ctx, creds, http.MethodGet, path, nil, &resp)
+	// Lark answers these refusals with HTTP 400, so the code may come from
+	// either the error or the envelope.
+	code, msg, hasCode := larkErrorCodeMsg(err)
+	if err == nil && resp.Code != 0 {
+		code, msg, hasCode = resp.Code, resp.Msg, true
+		if isTokenError(code) {
+			c.invalidateToken(creds.AppID)
+		}
+	}
+	switch {
+	case code == codeChatOperatorNotIn:
+		return ChatInfo{}, nil
+	case code == codeChatInvalidID:
+		return ChatInfo{}, ErrChatNotFound
+	case hasCode:
+		return ChatInfo{}, &APIError{Op: "get chat", Code: code, Msg: msg}
+	case err != nil:
+		return ChatInfo{}, fmt.Errorf("lark http client: get chat: %w", err)
+	}
+	return ChatInfo{BotInChat: resp.Data.ChatMode != "", External: resp.Data.External}, nil
 }
 
 var _ ChatAdmin = (*httpAPIClient)(nil)

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/events"
@@ -29,6 +30,14 @@ var (
 	ErrIssueChatNoSteward = errors.New("lark: no connected feishu bot can host this issue's chat")
 	// ErrIssueChatUnavailable: the deployment cannot manage Feishu chats.
 	ErrIssueChatUnavailable = errors.New("lark: feishu chat management unavailable")
+	// ErrIssueChatIssueBound: the issue already has a different chat.
+	ErrIssueChatIssueBound = errors.New("lark: the issue is already bound to another chat")
+	// ErrIssueChatTaken: the chat already hosts another issue.
+	ErrIssueChatTaken = errors.New("lark: the chat is already bound to another issue")
+	// ErrIssueChatBotNotInChat: the steward bot is not a member of the chat.
+	ErrIssueChatBotNotInChat = errors.New("lark: the steward bot is not in the chat")
+	// ErrIssueChatExternal: external chats are not supported.
+	ErrIssueChatExternal = errors.New("lark: external chats cannot host an issue")
 )
 
 // maxBotsPerChat is Lark's cap on bots in one group, the steward included.
@@ -150,7 +159,8 @@ func (s *IssueChatService) CanHost(ctx context.Context, issue db.Issue) (bool, e
 // EnsureChat returns the issue's chat, creating it on first call. Creation
 // invites the issue's participants: the squad's (or assignee agent's) bots,
 // the squad's human members, the issue creator and the actor, who becomes
-// the chat owner with the steward bot as manager.
+// the chat owner with the steward bot as manager. The task tab and pinned
+// progress card wait for the issue's first run (activateChat).
 func (s *IssueChatService) EnsureChat(ctx context.Context, p EnsureIssueChatParams) (IssueChat, error) {
 	if s.cfg.Chats == nil {
 		return IssueChat{}, ErrIssueChatUnavailable
@@ -223,14 +233,147 @@ func (s *IssueChatService) EnsureChat(ctx context.Context, p EnsureIssueChatPara
 	if err != nil {
 		return IssueChat{}, err
 	}
-	if issueLink != "" {
-		if err := s.cfg.Chats.AddChatURLTab(ctx, creds, chatID, "任务详情", issueLink); err != nil {
-			s.cfg.Logger.Warn("lark issue chat: add task tab failed", "chat_id", string(chatID), "error", err)
+	return s.chatView(ctx, row), nil
+}
+
+// BindIssueChatParams binds an issue to a chat that already exists.
+type BindIssueChatParams struct {
+	WorkspaceID pgtype.UUID
+	IssueID     pgtype.UUID
+	ActorUserID pgtype.UUID
+	ChatID      string
+}
+
+// BindChat makes an existing chat the issue's chat. The issue's steward bot
+// must already be in it; one chat hosts one issue, so a chat bound to another
+// issue is refused. Binding again to the same chat returns it. Participants
+// are invited as on creation; the chat keeps its name, owner and top notice
+// until the issue's first run (activateChat).
+func (s *IssueChatService) BindChat(ctx context.Context, p BindIssueChatParams) (IssueChat, error) {
+	if s.cfg.Chats == nil {
+		return IssueChat{}, ErrIssueChatUnavailable
+	}
+	defer s.lock("ensure:" + uuidString(p.IssueID))()
+	if existing, bound, err := s.boundChat(ctx, p.IssueID, p.ChatID); err != nil || bound {
+		return existing, err
+	}
+	issue, err := s.cfg.Store.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{ID: p.IssueID, WorkspaceID: p.WorkspaceID})
+	if err != nil {
+		return IssueChat{}, err
+	}
+	if _, err := s.cfg.Store.GetChannelIssueChatByRoute(ctx, db.GetChannelIssueChatByRouteParams{
+		ChannelType: channelTypeFeishu, ChatID: p.ChatID, ThreadRootMessageID: "",
+	}); err == nil {
+		return IssueChat{}, ErrIssueChatTaken
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return IssueChat{}, err
+	}
+	steward, err := s.steward(ctx, issue, pgtype.UUID{})
+	if err != nil {
+		return IssueChat{}, err
+	}
+	creds, err := installationCredentialsFor(steward, s.cfg.Credentials)
+	if err != nil {
+		return IssueChat{}, err
+	}
+	info, err := s.cfg.Chats.GetChatInfo(ctx, creds, ChatID(p.ChatID))
+	switch {
+	case err != nil:
+		return IssueChat{}, err
+	case !info.BotInChat:
+		return IssueChat{}, ErrIssueChatBotNotInChat
+	case info.External:
+		return IssueChat{}, ErrIssueChatExternal
+	}
+	row, err := s.cfg.Store.CreateChannelIssueChat(ctx, db.CreateChannelIssueChatParams{
+		WorkspaceID:           issue.WorkspaceID,
+		IssueID:               issue.ID,
+		RootIssueID:           issue.ID,
+		ChannelType:           channelTypeFeishu,
+		ChatID:                p.ChatID,
+		ThreadRootMessageID:   "",
+		StewardInstallationID: steward.ID,
+		CreatedBy:             p.ActorUserID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		existing, bound, gerr := s.boundChat(ctx, issue.ID, p.ChatID)
+		if gerr == nil && !bound {
+			gerr = ErrIssueChatIssueBound
+		}
+		return existing, gerr
+	}
+	// The insert yields on the issue; a unique violation is the chat's
+	// route, taken by a concurrent bind of another issue.
+	if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+		return IssueChat{}, ErrIssueChatTaken
+	}
+	if err != nil {
+		return IssueChat{}, err
+	}
+	agents, users := s.participants(ctx, issue, pgtype.UUID{})
+	s.inviteParticipants(ctx, steward, creds, ChatID(p.ChatID), agents, append(users, p.ActorUserID))
+	return s.chatView(ctx, row), nil
+}
+
+// boundChat reports the issue's current chat when it is chatID, and
+// ErrIssueChatIssueBound when it is another one.
+func (s *IssueChatService) boundChat(ctx context.Context, issueID pgtype.UUID, chatID string) (IssueChat, bool, error) {
+	row, err := s.cfg.Store.GetChannelIssueChatByIssue(ctx, db.GetChannelIssueChatByIssueParams{IssueID: issueID, ChannelType: channelTypeFeishu})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return IssueChat{}, false, nil
+	}
+	if err != nil {
+		return IssueChat{}, false, err
+	}
+	if row.ChatID != chatID || row.ThreadRootMessageID != "" {
+		return IssueChat{}, false, ErrIssueChatIssueBound
+	}
+	return s.chatView(ctx, row), true, nil
+}
+
+// activateChat completes a root chat once work on it starts: the task tab,
+// the pinned progress card and the artifact tabs. A chat that already has
+// its progress card is left alone.
+func (s *IssueChatService) activateChat(ctx context.Context, issueID pgtype.UUID) error {
+	if s.cfg.Chats == nil {
+		return nil
+	}
+	binding, err := s.cfg.Store.GetChannelIssueChatByIssue(ctx, db.GetChannelIssueChatByIssueParams{IssueID: issueID, ChannelType: channelTypeFeishu})
+	if err == nil && binding.RootIssueID != binding.IssueID {
+		binding, err = s.cfg.Store.GetChannelIssueChatByIssue(ctx, db.GetChannelIssueChatByIssueParams{IssueID: binding.RootIssueID, ChannelType: channelTypeFeishu})
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil || binding.Status != "active" {
+		return err
+	}
+	defer s.lock("progress:" + uuidString(binding.ID))()
+	if _, err := s.cfg.Store.GetChannelIssueIntroMessage(ctx, binding.ID); err == nil {
+		return nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	steward, ok, err := s.currentSteward(ctx, &binding)
+	if err != nil || !ok {
+		return err
+	}
+	creds, err := installationCredentialsFor(steward, s.cfg.Credentials)
+	if err != nil {
+		return err
+	}
+	issue, err := s.cfg.Store.GetIssue(ctx, binding.IssueID)
+	if err != nil {
+		return err
+	}
+	if _, link := s.issueIdentity(ctx, issue); link != "" {
+		if err := s.cfg.Chats.AddChatURLTab(ctx, creds, ChatID(binding.ChatID), "任务详情", link); err != nil {
+			s.cfg.Logger.Warn("lark issue chat: add task tab failed", "chat_id", binding.ChatID, "error", err)
 		}
 	}
-	s.sendIntro(ctx, creds, row, issue, plan)
-	s.syncArtifactTabs(ctx, row)
-	return s.chatView(ctx, row), nil
+	s.sendIntro(ctx, creds, binding, issue, s.uninvited(ctx, issue, steward))
+	s.syncArtifactTabs(ctx, binding)
+	return nil
 }
 
 // ancestorChat finds the nearest ancestor of issue bound to a chat.
@@ -344,7 +487,6 @@ type chatPlan struct {
 	ownerID      string
 	extraIDType  string
 	extraUsers   []string
-	uninvited    []string
 }
 
 // steward picks the bot that owns the chat: the leader's of hostSquad when
@@ -555,15 +697,32 @@ func (s *IssueChatService) planChat(ctx context.Context, issue db.Issue, hostSqu
 			}
 		case byType[plan.extraIDType] != "":
 			plan.extraUsers = append(plan.extraUsers, byType[plan.extraIDType])
-		default:
-			name := key
-			if u, err := s.cfg.Store.GetUser(ctx, id); err == nil {
-				name = u.Name
-			}
-			plan.uninvited = append(plan.uninvited, name)
 		}
 	}
 	return plan, nil
+}
+
+// uninvited names the issue's members who have no Feishu identity in the
+// workspace, so the chat could not invite them.
+func (s *IssueChatService) uninvited(ctx context.Context, issue db.Issue, steward Installation) []string {
+	_, users := s.participants(ctx, issue, pgtype.UUID{})
+	inv, err := s.resolveInvitees(ctx, issue.WorkspaceID, steward, nil, users)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, id := range inv.order {
+		key := uuidString(id)
+		if inv.openIDs[key] != "" || inv.unionIDs[key] != "" {
+			continue
+		}
+		name := key
+		if u, err := s.cfg.Store.GetUser(ctx, id); err == nil {
+			name = u.Name
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 func uniqueUUIDs(ids []pgtype.UUID) []pgtype.UUID {
@@ -580,10 +739,10 @@ func uniqueUUIDs(ids []pgtype.UUID) []pgtype.UUID {
 
 // sendIntro posts the chat's opening card, which then serves as its progress
 // card, and pins it to the top of the chat.
-func (s *IssueChatService) sendIntro(ctx context.Context, creds InstallationCredentials, row db.ChannelIssueChat, issue db.Issue, plan chatPlan) {
+func (s *IssueChatService) sendIntro(ctx context.Context, creds InstallationCredentials, row db.ChannelIssueChat, issue db.Issue, uninvited []string) {
 	var notes []string
-	if len(plan.uninvited) > 0 {
-		notes = append(notes, "以下成员尚未绑定飞书，未能拉入群："+strings.Join(plan.uninvited, "、"))
+	if len(uninvited) > 0 {
+		notes = append(notes, "以下成员尚未绑定飞书，未能拉入群："+strings.Join(uninvited, "、"))
 	}
 	card, err := s.progressCardJSON(ctx, issue, row.RootIssueID, notes...)
 	if err == nil {

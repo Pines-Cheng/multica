@@ -123,9 +123,15 @@ Multica 是唯一事实源和执行方；botmux 只作交互参考，不参与�
    - 人：Squad 人类成员 + issue 创建者 + 发起人，通过 `channel_user_binding` 取 `union_id`；无绑定的人跳过，并在介绍卡片里列出"未绑定飞书，未能拉入"。
 3. 调用建群：`name = "[MUL-12] <标题>"`，`uuid = issue_id`（飞书侧幂等），`user_id_type=union_id`，`owner_id = 发起人`，`set_bot_manager=true`；Bot ≤5 个时放进 `bot_id_list`，超出部分建群后按 5 个一批加入。
 4. 写入 `channel_issue_chat`（唯一索引兜底并发）。
-5. 管家发介绍卡片：标题、状态、负责人、Web 链接、"在群里 @Agent 即可让它干活"。
+5. 建群时只拉人。任务详情 Tab、介绍卡片（即置顶进度卡）、产物 Tab 等到该任务（或其子任务话题）第一次 `task:running` 时由 `activateChat` 补上；已有进度卡的群不再重复。启动前评论照常同步，元数据和产物变化不写 Tab。介绍卡片包含标题、状态、负责人、Web 链接、"在群里 @Agent 即可让它干活"，以及未绑定飞书、未能拉入群的成员。
 
-**产物 Tab**：建群及后续任务进度、metadata 或产物刷新时，使用群对应根任务的产物 `title` / `url`，以及 metadata 中所有有效的 HTTP(S) 链接，添加或更新顶部网页 Tab。没有产物名称白名单，也不根据 `kind` 决定是否展示。标题来自登记数据；metadata 链接使用原键名。产物记录优先于同键名的 metadata 链接；两处指向同一 URL 时也优先使用登记的标题，只显示一次。已有 metadata 链接需要补充展示标题时，使用相同键名登记产物即可。所有网页 Tab 设置 `is_built_in=true`，在飞书内打开。各任务独立同步，子任务话题的链接不会覆盖根任务的 Tab。原卡片链接及"查看任务"按钮行为保持不变。
+**绑定已有群**：`BindChat` 把已有群设为根任务的群（`root_issue_id = issue_id`，话题根为空），不建新群。
+
+- 校验：管家 Bot 必须已在群里（`GET /im/v1/chats/{chat_id}`，默认模板的 `im:chat:read` 即可；返回 232011 或只有公开字段都视为不在群）；外部群拒绝；一个群只承载一个根任务，已被其他任务占用返回 409。任务已绑定同一个群时直接返回；已绑定其他群时返回 409。
+- 绑定后只拉小组成员入群（同建群），群名、群主和群公告不变；Tab 和置顶同样等到首次运行再补。
+- 绑定后群里的消息都按 issue 群处理（写成评论），该群原有的普通会话链路不再生效。
+
+**产物 Tab**：任务首次运行补发进度卡时，以及之后任务进度、metadata 或产物刷新时，使用群对应根任务的产物 `title` / `url`，以及 metadata 中所有有效的 HTTP(S) 链接，添加或更新顶部网页 Tab。没有产物名称白名单，也不根据 `kind` 决定是否展示。标题来自登记数据；metadata 链接使用原键名。产物记录优先于同键名的 metadata 链接；两处指向同一 URL 时也优先使用登记的标题，只显示一次。已有 metadata 链接需要补充展示标题时，使用相同键名登记产物即可。所有网页 Tab 设置 `is_built_in=true`，在飞书内打开。各任务独立同步，子任务话题的链接不会覆盖根任务的 Tab。原卡片链接及"查看任务"按钮行为保持不变。
 
 **产物登记**：每个任务有独立的产物记录，存储稳定 `key`、展示 `title`、HTTP(S) `url` 和可选的自由文本 `kind`。`key` 用于更新同一条记录，`kind` 仅做分类；新增产物类型不需要新增枚举或修改卡片、Tab 和置顶规则。标题支持中文。登记命令：
 
@@ -216,6 +222,7 @@ if bound:
 | 入口 | 期次 | 行为 |
 |---|---|---|
 | issue 详情页按钮"创建飞书群"/"打开飞书群" | P0 | `POST /api/issues/{id}/channel-chat`，`GET` 返回绑定和 applink |
+| 接口创建任务时绑定已有群 | — | `POST /api/issues` 带 `channel_chat_id: "oc_…"`：任务先创建，再同步绑定该群，`issue:created` 不再自动建群。绑定失败不影响创建，201 响应中的 `channel_chat_error` 返回 `code` 和 `message`；成功时返回 `channel_chat`。重试：`POST /api/issues/{id}/channel-chat` 带 `{"chat_id": "oc_…"}`（无 body 时仍为建群）。错误码：`invalid_chat_id` 400、`chat_not_found` 404、`chat_already_bound` / `issue_chat_already_bound` / `steward_bot_not_in_chat` / `no_steward_bot` 409、`external_chat_unsupported` 422、`lark_api_error` 502 |
 | Web 上把 issue 指派给 Squad、或 comment `@Squad` | P1 | Squad 开关开启（默认开启）时，订阅事件后自动 `EnsureChat`，见 D1 |
 | Agent 创建子 issue | P1 | 祖先有群 → 自动开话题 |
 | 飞书里 `/issue <需求>` 发给 Leader Bot | P2 | 该 Agent 恰好领导一个 Squad 时指派给该 Squad 并自动建群；否则保持指派给 Agent，见 D3 |
