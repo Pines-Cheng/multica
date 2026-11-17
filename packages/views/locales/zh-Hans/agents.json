@@ -276,8 +276,8 @@
     "discard_confirm": "放弃修改"
   },
   "creation_studio": {
-    "title": "创建智能体",
-    "squad_title": "为小队创建智能体",
+    "title": "新建智能体",
+    "squad_title": "为小队新建智能体",
     "duplicate_title": "复制 {{name}}",
     "back": "返回",
     "step_ai": "通过对话创建",

@@ -85,7 +85,7 @@ const copy = {
   },
   zh: {
     frameTitle: "新建智能体",
-    shellTitle: "创建智能体",
+    shellTitle: "新建智能体",
     steps: ["选择运行时", "配置", "完成"],
     runtimeTitle: "这个智能体在哪里运行？",
     machinesGroup: "机器",
