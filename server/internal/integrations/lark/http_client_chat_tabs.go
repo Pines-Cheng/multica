@@ -19,8 +19,9 @@ type chatTab struct {
 	} `json:"tab_config"`
 }
 
-// SyncChatURLTabs preserves manual tabs, updating only persisted tab IDs.
-// Created IDs are returned in the caller's slice, including on partial failure.
+// SyncChatURLTabs preserves manual tabs and suppresses identical links.
+// Created IDs and cleared duplicate IDs are returned in the caller's slice,
+// including on partial failure.
 func (c *httpAPIClient) SyncChatURLTabs(ctx context.Context, creds InstallationCredentials, chatID ChatID, tabs []ChatURLTab) error {
 	if len(tabs) == 0 {
 		return nil
@@ -54,16 +55,53 @@ func (c *httpAPIClient) SyncChatURLTabs(ctx context.Context, creds InstallationC
 			remaining--
 		}
 	}
+	ownedIDs := make(map[string]bool, len(tabs))
+	for _, tab := range tabs {
+		if tab.ID != "" {
+			ownedIDs[tab.ID] = true
+		}
+	}
+	satisfied := make(map[int]bool)
+	var duplicateIDs []string
+	for i, want := range tabs {
+		for _, existing := range resp.Data.Tabs {
+			if existing.ID == "" || ownedIDs[existing.ID] || existing.Type != "url" || existing.Name != want.Name || existing.Content.URL != want.URL {
+				continue
+			}
+			// An identical manual or legacy tab already exposes this link. Do
+			// not adopt it; only remove a duplicate whose ownership is known.
+			satisfied[i] = true
+			if duplicate, ok := byID[want.ID]; ok && duplicate.Type == "url" {
+				duplicateIDs = append(duplicateIDs, duplicate.ID)
+			}
+			break
+		}
+	}
+	if len(duplicateIDs) > 0 {
+		if err := c.deleteChatTabs(ctx, creds, path+"/delete_tabs", duplicateIDs); err != nil {
+			return err
+		}
+		for _, id := range duplicateIDs {
+			names[byID[id].Name]--
+			delete(byID, id)
+			remaining++
+		}
+	}
+	for i := range satisfied {
+		tabs[i].ID = ""
+	}
 	var creates, updates []chatTab
 	var createdIndexes []int
 	for i, want := range tabs {
+		if satisfied[i] {
+			continue
+		}
 		existing, found := byID[want.ID]
 		owned := want.ID != "" && found && existing.Type == "url"
 		if !owned && remaining <= 0 {
 			continue
 		}
-		// Titles are data, not ownership markers. Resolve collisions without
-		// changing a manual tab, including one with the same URL and title.
+		// Same-title tabs with different content still need distinct names.
 		base := want.Name
 		for n := 2; names[want.Name] > 0 && !(owned && existing.Name == want.Name && names[want.Name] == 1); n++ {
 			suffix := fmt.Sprintf(" (%d)", n)
@@ -116,6 +154,23 @@ func (c *httpAPIClient) SyncChatURLTabs(ctx context.Context, creds InstallationC
 	}
 	if !complete {
 		return fmt.Errorf("lark http client: created chat tab response missing tab IDs")
+	}
+	return nil
+}
+
+func (c *httpAPIClient) deleteChatTabs(ctx context.Context, creds InstallationCredentials, path string, ids []string) error {
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := c.doAuthedJSON(ctx, creds, http.MethodDelete, path, map[string]any{"tab_ids": ids}, &resp); err != nil {
+		return fmt.Errorf("lark http client: delete duplicate chat tabs: %w", err)
+	}
+	if resp.Code != 0 {
+		if isTokenError(resp.Code) {
+			c.invalidateToken(creds.AppID)
+		}
+		return &APIError{Op: "delete duplicate chat tabs", Code: resp.Code, Msg: resp.Msg}
 	}
 	return nil
 }

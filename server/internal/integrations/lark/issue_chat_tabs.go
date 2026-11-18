@@ -86,8 +86,13 @@ func (s *IssueChatService) updateArtifactTabs(ctx context.Context, binding db.Ch
 	syncErr := s.cfg.Chats.SyncChatURLTabs(ctx, creds, ChatID(binding.ChatID), tabs)
 	changed := false
 	for _, tab := range tabs {
-		if tab.ID != "" && owned[tab.Key] != tab.ID {
-			owned[tab.Key], changed = tab.ID, true
+		if owned[tab.Key] != tab.ID {
+			if tab.ID == "" {
+				delete(owned, tab.Key)
+			} else {
+				owned[tab.Key] = tab.ID
+			}
+			changed = true
 		}
 	}
 	if !changed {

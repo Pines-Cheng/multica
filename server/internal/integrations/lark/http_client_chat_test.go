@@ -248,29 +248,15 @@ func TestHTTPClient_SyncChatURLTabs_DoesNotAdoptManualURLTabs(t *testing.T) {
 	manual.Content.URL = "https://docs.example/report"
 	manual.Config.IsBuiltIn = true
 	existing := []chatTab{manual}
-	creates := 0
 	fake.mux.HandleFunc(path+"/list_tabs", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"code": 0, "data": map[string]any{"chat_tabs": existing}})
 	})
-	fake.mux.HandleFunc(path+"/update_tabs", func(w http.ResponseWriter, r *http.Request) {
-		t.Error("manual tab must not be updated or adopted")
-		writeJSON(w, map[string]any{"code": 0})
-	})
-	fake.mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-		creates++
-		var body struct {
-			Tabs []chatTab `json:"chat_tabs"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Error(err)
-		}
-		if len(body.Tabs) != 1 || body.Tabs[0].Name != "Report (2)" {
-			t.Errorf("name collision must be resolved without changing the manual tab: %+v", body.Tabs)
-		}
-		body.Tabs[0].ID = "owned"
-		existing = append(existing, body.Tabs...)
-		writeJSON(w, map[string]any{"code": 0, "data": map[string]any{"chat_tabs": body.Tabs}})
-	})
+	for _, endpoint := range []string{path, path + "/update_tabs", path + "/delete_tabs"} {
+		fake.mux.HandleFunc(endpoint, func(w http.ResponseWriter, r *http.Request) {
+			t.Errorf("an identical manual tab must satisfy the link without writes: %s", r.URL.Path)
+			writeJSON(w, map[string]any{"code": 232001})
+		})
+	}
 	tabs := []ChatURLTab{{Key: "report", Name: "Report", URL: manual.Content.URL}}
 	client := newTestClient(fake, time.Now)
 	for range 2 {
@@ -278,7 +264,7 @@ func TestHTTPClient_SyncChatURLTabs_DoesNotAdoptManualURLTabs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if creates != 1 || tabs[0].ID != "owned" || existing[0] != manual {
-		t.Fatalf("ownership/idempotency failed: creates=%d; tabs=%+v; existing=%+v", creates, tabs, existing)
+	if tabs[0].ID != "" || existing[0] != manual {
+		t.Fatalf("manual tab must remain unowned and unchanged: tabs=%+v; existing=%+v", tabs, existing)
 	}
 }
