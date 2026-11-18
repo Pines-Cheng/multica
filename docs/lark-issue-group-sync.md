@@ -136,15 +136,11 @@ Multica 是唯一事实源和执行方；botmux 只作交互参考，不参与�
 **产物登记**：每个任务有独立的产物记录，存储稳定 `key`、展示 `title`、HTTP(S) `url` 和可选的自由文本 `kind`。`key` 用于更新同一条记录，`kind` 仅做分类；新增产物类型不需要新增枚举或修改卡片、Tab 和置顶规则。标题支持中文。登记命令：
 
 ```sh
-multica issue artifact set DEV-43 --key design --title "技术方案" --url "https://example.feishu.cn/docx/design" --kind design --generated
-multica issue artifact set DEV-43 --key load_test --title "压测报告" --url "https://example.feishu.cn/docx/report" --kind load-test --generated
+multica issue artifact set DEV-43 --key design --title "技术方案" --url "https://example.feishu.cn/docx/design" --kind design
+multica issue artifact set DEV-43 --key load_test --title "压测报告" --url "https://example.feishu.cn/docx/report" --kind load-test
 multica issue artifact list DEV-43 --output json
 multica issue artifact delete DEV-43 --key load_test
 ```
-
-**生成文档的授权**：飞书文档链接必须选择 `--generated`（本任务生成）或 `--reference`（已有参考资料）。`--generated` 在登记前通过 `GET /api/issues/{id}/artifact-audience` 获取接收人：优先使用当前任务或最近祖先的有效任务群；无群时，优先取当前运行的小队，否则取最近所属小队的人类成员，并加入当前运行的原始发起人、任务和祖先任务的人类创建者及负责人，按完整邮箱去重。身份缺失或成员已离开工作区时返回错误，不静默漏人。
-
-授权由执行端的 `lark-cli --as user` 完成，使用文档创建者或有协作者管理权限的账号。先查询已有协作者，只补阅读权限，再回读核验；已有编辑和管理权限不降级。更新同一文档仍使用 `--generated`，只补缺少的成员。Wiki 链接解析到底层文档，不扩大到子页面。授权或核验失败时 CLI 不登记产物，Agent 应报告权限未就绪并请求协助；引用资料、公开链接权限和 Agent 编辑权限不在自动授权范围内。直接调用产物 PUT、写 metadata 或在评论中粘贴链接没有这一步，因此运行时指令要求新生成的文档先经此命令交付。群卡片、置顶和网页 Tab 本身不授予文档权限。
 
 API 为 `GET /api/issues/{id}/artifacts`、`PUT /api/issues/{id}/artifacts/{key}`、`DELETE /api/issues/{id}/artifacts/{key}`。PUT 正文为 `{ "title": "技术方案", "url": "https://example.feishu.cn/docx/design", "kind": "design" }`，按键原子替换完整记录；省略 `kind` 会清除分类。键名遵循 `^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$`，标题为 1–120 个字符的单行文本，链接上限 2048 字节，分类上限 64 个字符，单个任务产物数据上限 16KB。产物变更发布 `issue_artifacts:changed`，刷新原有置顶卡及该任务的顶部标签；重复写入相同内容和删除不存在的键不会再次刷新。现有 metadata 保持标量 KV 契约，产物独立存储，不向 metadata 双写。
 

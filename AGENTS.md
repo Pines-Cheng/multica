@@ -59,7 +59,6 @@ Docs-only changes can use link/reference checks and `git diff --check`; state th
 - Optimistic field patches require a predictable result, rare failure, trivial rollback, and staying on the current screen. Snapshot before patching, roll back on failure, and invalidate uncertain projections on settle.
 - Create/delete/leave and confirmation flows await the server before navigation or cleanup; do not optimistically delete entities. Exceptions: workspace leave (known debt under Desktop Rules) and mobile inbox mark-read (mobile instructions).
 - Message sends use visible pending state and retry on failure.
-- Task-generated Feishu/Lark documents are published through `multica issue artifact set --generated`: the execution-side Lark identity grants and verifies readers before artifact registration. The server resolves the task/ancestor group, or the squad's human members and task participants. Reference links do not authorize sharing; group cards and tabs do not grant document access. Keep this delivery rule in the runtime brief and the platform skill when changing the workflow.
 
 ## API Compatibility
 
