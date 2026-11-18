@@ -2116,6 +2116,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/metadata/{key}", h.SetIssueMetadataKey)
 					r.Delete("/metadata/{key}", h.DeleteIssueMetadataKey)
 					r.Get("/artifacts", h.ListIssueArtifacts)
+					r.Get("/artifact-audience", h.GetIssueArtifactAudience)
 					r.Put("/artifacts/{key}", h.SetIssueArtifact)
 					r.Delete("/artifacts/{key}", h.DeleteIssueArtifact)
 					r.Put("/properties/{propertyId}", h.SetIssueProperty)

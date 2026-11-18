@@ -3,6 +3,7 @@
 Product contracts the runtime brief does not fully encode.
 
 - [PR linking](#pr-linking)
+- [Generated document delivery](#generated-document-delivery)
 - [Reading a linked PR's real state](#reading-a-linked-prs-real-state)
 - [Custom properties: typed workflow state](#custom-properties-typed-workflow-state)
 - [Status changes have server side effects](#status-changes-have-server-side-effects)
@@ -12,6 +13,43 @@ Product contracts the runtime brief does not fully encode.
 - [Incorrect to correct](#incorrect-to-correct)
 
 To attach a local file to an existing issue description, use `multica issue update <id> --attachment <local-path>`. The CLI appends the file's Markdown reference to the end of the description; to replace an image, also use `--description-file` to remove the old reference. Do not put local filesystem paths in the description.
+
+## Generated document delivery
+
+Publish a task-generated Feishu/Lark document before linking it in a completion
+comment:
+
+```bash
+multica issue artifact set <issue-id> --key report --title "Report" --url <document-url> --generated
+```
+
+The CLI asks the server for the current delivery audience. An active task group
+(including the nearest ancestor's group) takes precedence. Without a group, the
+audience is the executing run's squad (or nearest assigned squad)'s human members
+plus the run's human originator and human creators and assignees of the task and
+its ancestors. People are deduplicated by full email,
+then resolved using the creator's local Lark account. Missing identities block
+publication instead of silently omitting a recipient.
+
+Use the same logged-in `lark-cli --as user` account that created the document, or
+an account allowed to manage its collaborators. The command reads existing
+collaborators, grants missing readers, and verifies the result before registering
+the artifact. It does not downgrade existing edit/manage access or change public
+link sharing. Wiki URLs resolve to the underlying document; child pages are not
+shared. Repeating the command only adds missing readers, including recipients
+added since the previous delivery.
+
+An authorization error means the document is not ready for delivery. Report the
+failure and request assistance; do not retry without `--generated`, post a
+completion link, or claim recipient access was verified. Partial grants may have
+succeeded; rerunning safely checks the remaining readers. Grant edit access for
+a collaborating agent separately to the identity it actually uses.
+
+Use `--reference` for existing reference documents. Feishu/Lark links require
+one of these two flags, so forgetting the sharing step cannot silently publish
+a new document through the CLI. Other artifact URLs
+retain the ordinary `artifact set` behavior. Direct API writes and arbitrary
+links in comments do not perform this runtime-side authorization step.
 
 ## PR linking
 
