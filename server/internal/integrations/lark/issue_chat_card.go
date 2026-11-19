@@ -28,9 +28,10 @@ type issueCardContent struct {
 }
 
 type issueCardProgress struct {
-	title    string
-	status   string
-	assignee string
+	title      string
+	status     string
+	assignee   string
+	assistance string
 }
 
 // issueChatCardJSON renders a mirrored timeline entry as a schema-2.0 card.
@@ -64,8 +65,12 @@ func marshalIssueCard(content issueCardContent) (string, error) {
 			if item.assignee != "" {
 				detail += " · <font color='grey'>" + html.EscapeString(item.assignee) + "</font>"
 			}
+			title := item.title
+			if item.assistance != "" {
+				title += " · " + item.assistance
+			}
 			rows = append(rows, issueCardColumns(
-				map[string]any{"tag": "markdown", "content": item.title},
+				map[string]any{"tag": "markdown", "content": title},
 				map[string]any{"tag": "markdown", "content": detail, "text_align": "right"},
 			))
 		}

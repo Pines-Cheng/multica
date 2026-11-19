@@ -40,7 +40,7 @@ func TestIssueChatAssistance_CloseRefreshesBothCardsWithoutNewMessages(t *testin
 	}); err != nil {
 		t.Fatal(err)
 	}
-	content := "Bits login requires authentication. [@Owner](mention://member/" + f.user + ")"
+	content := "Bits login requires authentication. [@Owner](mention://member/" + f.user + ")\n- Background verification is pending.\n- Requirements are ready."
 	comment := f.fx.Insert(t, "comment", testutil.Cols{"issue_id": child, "workspace_id": f.ws, "author_type": "agent", "author_id": f.leader, "content": content, "type": "comment", "assistance_status": "open", "source_task_id": taskID})
 	publish := func(eventType, state string) {
 		f.bus.Publish(events.Event{Type: eventType, WorkspaceID: f.ws, Payload: map[string]any{"comment": map[string]any{"id": comment, "issue_id": child, "author_type": "agent", "author_id": f.leader, "content": content, "type": "comment", "assistance_status": state, "source_task_id": taskID}}})
@@ -56,12 +56,18 @@ func TestIssueChatAssistance_CloseRefreshesBothCardsWithoutNewMessages(t *testin
 	if card.Header.Title.Content != "待 Owner 处理" {
 		t.Fatalf("request card = %+v", card.Header)
 	}
+	if len(card.Body.Elements) != 2 || !strings.Contains(card.Body.Elements[0].Content, "Bits login requires authentication.") || strings.Contains(card.Body.Elements[0].Content, "Background") || card.Body.Elements[1].Text.Content != "查看讨论" {
+		t.Fatalf("request card must show only the opening request and one discussion link: %+v", card.Body.Elements)
+	}
 	progress := f.progressCard(t, root)
 	if !strings.Contains(progress, "任务进展与产物｜待协助") {
 		t.Fatalf("pinned preview must surface open assistance: %s", progress)
 	}
-	if !strings.Contains(progress, "待协助") || !strings.Contains(progress, "Bits login") || !strings.Contains(progress, "/client/thread/open?") || !strings.Contains(progress, "thread_position=3") {
-		t.Fatalf("root card must expose the request and native topic link: %s", progress)
+	if !strings.Contains(progress, "待协助") || strings.Contains(progress, "Bits login") || !strings.Contains(progress, "/client/thread/open?") || !strings.Contains(progress, "thread_position=3") {
+		t.Fatalf("root card must expose only the compact assistance link: %s", progress)
+	}
+	if !strings.Contains(progress, "[待协助](") || strings.Contains(progress, "**待协助**") {
+		t.Fatalf("child assistance must use a compact link: %s", progress)
 	}
 	sent := len(f.api.sent)
 	f.fx.Exec(t, "UPDATE comment SET assistance_status = 'closed' WHERE id = $1", comment)
@@ -85,8 +91,8 @@ func TestIssueChatAssistance_CloseRefreshesBothCardsWithoutNewMessages(t *testin
 	}
 	f.fx.Exec(t, "UPDATE comment SET assistance_status = 'open', content = 'Updated authentication request [@Owner](mention://member/"+f.user+")' WHERE id = $1", comment)
 	publish(protocol.EventCommentUpdated, "open")
-	if !strings.Contains(f.progressCard(t, root), "Updated authentication request") {
-		t.Fatal("request edits and explicit reopen must refresh the pinned summary")
+	if progress = f.progressCard(t, root); !strings.Contains(progress, "待协助") || strings.Contains(progress, "Updated authentication request") {
+		t.Fatal("explicit reopen must restore the compact assistance entry")
 	}
 	f.fx.Exec(t, "UPDATE comment SET deleted_at = now(), content = '' WHERE id = $1", comment)
 	publish(protocol.EventCommentUpdated, "open")
@@ -109,6 +115,23 @@ func TestAttentionNames_RequiresExplicitOpenAssistance(t *testing.T) {
 		if got := attentionNames(commentEvent{AuthorType: "agent", Content: tc.body, AssistanceStatus: tc.state}); got != tc.want {
 			t.Errorf("%s: %q, want %q", tc.state, got, tc.want)
 		}
+	}
+}
+
+func TestAssistanceCardPreview(t *testing.T) {
+	for _, tc := range []struct{ name, body, want string }{
+		{"request", "请完成登录。", "请完成登录。"},
+		{"background list", "请完成登录，并回复已登录。\n- 核验停在登录页。\n- 需求稿已完成。", "请完成登录，并回复已登录。"},
+		{"background paragraph", "请完成登录。\n\n核验停在登录页。", "请完成登录。"},
+		{"wrapped request", "请打开 [SSO](https://example.com/login)，\n登录后回复已登录。\n\n背景说明。", "请打开 [SSO](https://example.com/login)，\n登录后回复已登录。"},
+		{"list request", "- 登录\n- 回复已登录", "- 登录\n- 回复已登录"},
+		{"empty", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := assistanceCardPreview(tc.body); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

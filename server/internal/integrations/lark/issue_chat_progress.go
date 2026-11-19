@@ -67,18 +67,17 @@ func (s *IssueChatService) progressCardJSON(ctx context.Context, issue db.Issue,
 		summary: cardSummary("", label+" · "+strings.TrimSpace(identifier+" "+issue.Title)), template: template,
 		action: issueCardLink{label: "查看任务", url: link}, links: issueArtifactLinks(issue.Metadata, issue.Artifacts),
 	}
-	needsAssistance := false
+	var assistance map[pgtype.UUID]string
 	if !topic {
 		content.title = progressOverviewTitle
 		content.subtitle = strings.Join(subtitle[1:], " · ")
 		content.sections = append(content.sections, issueCardMarkdownText(issue.Title))
-		summary, err := s.assistanceSummary(ctx, issue)
+		assistance, err = s.assistanceLinks(ctx, issue)
 		if err != nil {
 			return "", err
 		}
-		if summary != "" {
-			needsAssistance = true
-			content.sections = append(content.sections, summary)
+		if entry := assistance[issue.ID]; entry != "" {
+			content.sections = append(content.sections, entry)
 		}
 	}
 	if issue.Status == issuestatus.InReview {
@@ -108,7 +107,7 @@ func (s *IssueChatService) progressCardJSON(ctx context.Context, issue db.Issue,
 				blocked = append(blocked, childLabel(c)+" · "+childStatus)
 			}
 			name := s.assigneeName(ctx, c)
-			content.progress = append(content.progress, issueCardProgress{title: child, status: childStatus, assignee: name})
+			content.progress = append(content.progress, issueCardProgress{title: child, status: childStatus, assignee: name, assistance: assistance[c.ID]})
 			if c.Status == issuestatus.Todo || issueCardCategory(c.Status, catalog) == issuestatus.CategoryStarted {
 				activity := childLabel(c) + " · " + childStatus
 				if name != "" {
@@ -125,13 +124,6 @@ func (s *IssueChatService) progressCardJSON(ctx context.Context, issue db.Issue,
 		}
 	}
 	category := issueCardCategory(issue.Status, catalog)
-	if issue.Status == issuestatus.InReview {
-		content.sections = append(content.sections, "当前：待验收")
-	} else if issue.Status == issuestatus.Blocked {
-		content.sections = append(content.sections, "当前："+label)
-	} else if len(current) > 0 && category != issuestatus.CategoryDone && category != issuestatus.CategoryClosed {
-		content.sections = append(content.sections, "当前："+strings.Join(current, "；"))
-	}
 	if !topic {
 		state := label
 		if issue.Status == issuestatus.InReview {
@@ -143,7 +135,7 @@ func (s *IssueChatService) progressCardJSON(ctx context.Context, issue db.Issue,
 				state = strings.Join(current, "；")
 			}
 		}
-		if needsAssistance {
+		if len(assistance) > 0 {
 			state = "待协助 · " + state
 		}
 		content.summary = cardSummary("", progressOverviewTitle+"｜"+state)

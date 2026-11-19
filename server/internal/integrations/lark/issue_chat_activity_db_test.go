@@ -489,7 +489,7 @@ func TestIssueChatCards_KeepsStandaloneIdentityAndPendingOwner(t *testing.T) {
 	f.publishIssue(protocol.EventIssueUpdated, child, map[string]any{"status_changed": true})
 	f.fx.Exec(t, `UPDATE issue SET status = 'in_review' WHERE id = $1`, parent)
 	f.publishIssue(protocol.EventIssueUpdated, parent, map[string]any{"status_changed": true})
-	if progress := f.progressCard(t, parent); !strings.Contains(progress, "当前：待验收") {
+	if progress := f.progressCard(t, parent); !strings.Contains(progress, "任务进展与产物｜待验收") || strings.Contains(progress, "当前：") {
 		t.Fatalf("delivery after the children finish must retain the review prompt: %s", progress)
 	}
 }

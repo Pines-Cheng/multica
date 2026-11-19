@@ -3,16 +3,32 @@ package lark
 import (
 	"context"
 	"errors"
-	"html"
 	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/text"
 
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+// Keep the opening request intact, including wrapped lines and inline links.
+// Background paragraphs and lists remain available in the original comment.
+func assistanceCardPreview(markdown string) string {
+	source := []byte(markdown)
+	first := goldmark.DefaultParser().Parse(text.NewReader(source)).FirstChild()
+	paragraph, ok := first.(*ast.Paragraph)
+	if !ok || paragraph.Lines().Len() == 0 {
+		return markdown
+	}
+	lines := paragraph.Lines()
+	return strings.TrimSpace(string(source[lines.At(0).Start:lines.At(lines.Len()-1).Stop]))
+}
 
 func (s *IssueChatService) issueCommentLink(ctx context.Context, issueID, commentID string) (string, string) {
 	id, err := util.ParseUUID(issueID)
@@ -32,36 +48,32 @@ func (s *IssueChatService) issueCommentLink(ctx context.Context, issueID, commen
 
 // Assistance is independent of thread resolution and task status. Only an
 // explicit request enters this list, and only an explicit close removes it.
-func (s *IssueChatService) assistanceSummary(ctx context.Context, issue db.Issue) (string, error) {
+func (s *IssueChatService) assistanceLinks(ctx context.Context, issue db.Issue) (map[pgtype.UUID]string, error) {
 	binding, err := s.cfg.Store.GetChannelIssueChatByIssue(ctx, db.GetChannelIssueChatByIssueParams{IssueID: issue.ID, ChannelType: channelTypeFeishu})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
+		return nil, nil
 	}
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	requests, err := s.cfg.Store.ListOpenAssistanceForChannelChat(ctx, db.ListOpenAssistanceForChannelChatParams{RootIssueID: issue.ID, WorkspaceID: issue.WorkspaceID, ChannelType: channelTypeFeishu})
 	if err != nil || len(requests) == 0 {
-		return "", err
+		return nil, err
 	}
 	steward, ok, err := s.currentSteward(ctx, &binding)
 	if err != nil || !ok {
-		return "", err
+		return nil, err
 	}
 	creds, err := installationCredentialsFor(steward, s.cfg.Credentials)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	lines := []string{"**待协助**"}
+	links := make(map[pgtype.UUID]string)
 	for _, request := range requests {
-		c := commentEvent{Content: request.Content, AuthorType: request.AuthorType, AssistanceStatus: request.AssistanceStatus}
-		identifier, webLink := s.issueCommentLink(ctx, uuidString(request.IssueID), uuidString(request.ID))
-		label := html.EscapeString(attentionNames(c)) + " · " + identifier
-		if validIssueCardURL(webLink) {
-			label += " · " + issueCardMarkdownLink(issueCardLink{label: "处理请求", url: webLink})
+		if _, exists := links[request.IssueID]; exists {
+			continue
 		}
-		summary := util.MentionRe.ReplaceAllString(request.Content, "")
-		label += "\n" + html.EscapeString(oneLine(strings.TrimSpace(summary), 100))
+		_, link := s.issueCommentLink(ctx, uuidString(request.IssueID), uuidString(request.ID))
 		if request.ChannelMessageID != "" {
 			messages, getErr := s.cfg.API.GetMessage(ctx, creds, request.ChannelMessageID)
 			if getErr != nil {
@@ -69,15 +81,19 @@ func (s *IssueChatService) assistanceSummary(ctx context.Context, issue db.Issue
 			}
 			for _, message := range messages {
 				if message.MessageID == request.ChannelMessageID {
-					if link := chatMessageAppLink(RegionOrDefault(steward.Region), binding.ChatID, message); link != "" {
-						label += " · " + issueCardMarkdownLink(issueCardLink{label: "查看话题", url: link})
+					if topicLink := chatMessageAppLink(RegionOrDefault(steward.Region), binding.ChatID, message); topicLink != "" {
+						link = topicLink
 					}
 				}
 			}
 		}
-		lines = append(lines, label)
+		label := "待协助"
+		if validIssueCardURL(link) {
+			label = issueCardMarkdownLink(issueCardLink{label: label, url: link})
+		}
+		links[request.IssueID] = label
 	}
-	return strings.Join(lines, "\n\n"), nil
+	return links, nil
 }
 
 func chatMessageAppLink(region Region, chatID string, message LarkMessage) string {

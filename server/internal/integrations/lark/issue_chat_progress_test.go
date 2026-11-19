@@ -27,7 +27,13 @@ func TestIssueChatOverview_ExplainsContentsAndReflectsCurrentWork(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		return decodeIssueCard(t, raw)
+		card := decodeIssueCard(t, raw)
+		for _, element := range card.Body.Elements {
+			if strings.Contains(cardMarkdown(element), "当前：") {
+				t.Fatalf("overview repeats progress in a current-work paragraph: %s", raw)
+			}
+		}
+		return card
 	}
 	card := render()
 	if card.Header.Title.Content != "任务进展与产物" || card.Header.Subtitle.Content != "进行中 · Chat Squad" || card.Config.Summary.Content != "任务进展与产物｜进行中" {

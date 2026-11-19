@@ -111,7 +111,7 @@ func TestIssueCard_LightSectionsKeepProgressAndAllArtifactLinks(t *testing.T) {
 	raw, err := marshalIssueCard(issueCardContent{
 		progress: []issueCardProgress{
 			{title: "[开发](https://multica.example/dev/issues/DEV-30)", status: "已完成", assignee: "Developer & Reviewer"},
-			{title: "自定义阶段", status: "人工确认"},
+			{title: "自定义阶段", status: "人工确认", assistance: "[待协助](https://multica.example/request)"},
 		},
 		links: links, action: issueCardLink{label: "查看任务", url: "https://multica.example/dev/issues/DEV-29"},
 		footnotes: []string{progressHint},
@@ -128,6 +128,15 @@ func TestIssueCard_LightSectionsKeepProgressAndAllArtifactLinks(t *testing.T) {
 		if !strings.Contains(progress, want) {
 			t.Errorf("progress lost %q: %s", want, progress)
 		}
+	}
+	progressRows := card.Body.Elements[0].Columns[0].Elements
+	for _, row := range progressRows[1:] {
+		if len(row.Columns) != 2 || row.Columns[1].Elements[0].TextAlign != "right" {
+			t.Fatalf("progress must keep stage left and status/assignee right: %+v", row)
+		}
+	}
+	if !strings.Contains(progressRows[2].Columns[0].Elements[0].Content, "[待协助](https://multica.example/request)") {
+		t.Fatalf("assistance must stay in the corresponding progress row: %s", raw)
 	}
 	section := card.Body.Elements[1]
 	if section.Tag != "column_set" || len(section.Columns) != 1 {

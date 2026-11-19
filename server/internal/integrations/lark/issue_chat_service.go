@@ -1092,6 +1092,9 @@ func (s *IssueChatService) patchMirrors(ctx context.Context, binding db.ChannelI
 // comment appearance.
 func (s *IssueChatService) commentCardJSON(ctx context.Context, workspaceID pgtype.UUID, sender Installation, relayLabel string, c commentEvent) (string, error) {
 	body := s.commentMarkdown(ctx, workspaceID, sender, c.Content)
+	if c.AssistanceStatus == "open" || c.AssistanceStatus == "closed" {
+		body = assistanceCardPreview(body)
+	}
 	if who := attentionNames(c); who != "" {
 		content := issueCardContent{
 			title: "待 " + who + " 处理", subtitle: relayLabel,
