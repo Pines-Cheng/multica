@@ -220,7 +220,11 @@ func (r *LarkOutcomeReplier) Reply(ctx context.Context, inst Installation, msg I
 			}
 		}
 	case OutcomeDropped:
-		// OutcomeDropped is informational; no user-visible reply.
+		if res.DropReason == DropReasonNonWorkspaceMember && msg.AddressedToBot {
+			if err := r.sendChatNotice(ctx, inst, msg, "未接收：你没有此任务的访问权限，请联系工作区管理员。"); err != nil {
+				r.log.Warn("lark outcome replier: access notice failed", "error", err)
+			}
+		}
 	}
 }
 

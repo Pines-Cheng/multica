@@ -95,21 +95,29 @@ func TestRouter_IssueChat_UnaddressedMessageBecomesComment(t *testing.T) {
 }
 
 // Several bots sit in one bound chat and each receives the messages that
-// @ it; only the steward ingests, so one message is one comment.
-func TestRouter_IssueChat_NonStewardStandsDown(t *testing.T) {
+// @ it; any bot in the workspace may deliver the event to the durable queue.
+func TestRouter_IssueChat_NonStewardIngests(t *testing.T) {
 	h, ic := newIssueChatHarness(t)
 	ic.route.StewardInstallationID = uid(250)
 	if err := h.router.Handle(context.Background(), groupMessage(t, true)); err != nil {
-		t.Fatalf("Handle: %v", err)
+		t.Fatal(err)
 	}
-	if ic.records() != 0 {
-		t.Fatal("a non-steward installation must not record a comment")
-	}
-	if r, _ := h.audit.last(); r != DropReasonIssueChatNotSteward {
-		t.Fatalf("expected %q, got %q", DropReasonIssueChatNotSteward, r)
+	if ic.records() != 1 {
+		t.Fatal("a workspace bot must ingest the mention")
 	}
 	if h.binder.ensureCalls != 0 {
-		t.Fatal("a non-steward must not fall through to the Chat pipeline")
+		t.Fatal("must not open a separate chat session")
+	}
+}
+
+func TestRouter_IssueChat_RejectsForeignWorkspace(t *testing.T) {
+	h, ic := newIssueChatHarness(t)
+	ic.route.WorkspaceID = uid(250)
+	if err := h.router.Handle(context.Background(), groupMessage(t, true)); err != nil {
+		t.Fatal(err)
+	}
+	if ic.records() != 0 {
+		t.Fatal("foreign workspace bot ingested a message")
 	}
 }
 

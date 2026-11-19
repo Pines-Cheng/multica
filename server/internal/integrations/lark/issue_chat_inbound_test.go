@@ -143,11 +143,12 @@ func TestIssueChatInboundResolvesMediaBeforeWritingComment(t *testing.T) {
 			defer cancel()
 			done := make(chan error, 1)
 			go func() {
-				done <- r.processIssueComment(ctx, db.ChannelIssueCommentPending{
+				_, err := r.processIssueComment(ctx, db.ChannelIssueCommentPending{
 					WorkspaceID: f.binding.WorkspaceID, IssueID: f.binding.IssueID,
 					BindingID: f.binding.ID, InstallationID: f.steward.ID, AuthorUserID: uuidFromString(t, icMember),
 					ChannelMessageID: lm.MessageID, Message: raw,
 				})
+				done <- err
 			}()
 			select {
 			case <-media.started:

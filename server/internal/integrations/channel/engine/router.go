@@ -358,13 +358,13 @@ func (r *Router) dispatch(ctx context.Context, set ResolverSet, msg channel.Inbo
 }
 
 // processIssueChat records one message of an issue-bound chat as a comment.
-// Only the steward installation ingests, which is what keeps a message seen
-// by several bots in the chat to a single comment. Unbound senders get the
+// Any installation in the bound workspace can ingest. The durable message
+// queue deduplicates callbacks from different bots. Unbound senders get the
 // binding prompt only when they addressed the bot; ordinary chatter from
 // them is dropped silently rather than answered with a card per message.
 func (r *Router) processIssueChat(ctx context.Context, set ResolverSet, msg channel.InboundMessage, inst ResolvedInstallation, route IssueChatRoute) (Result, dedupFinalize, error) {
-	if inst.ID != route.StewardInstallationID {
-		return r.drop(ctx, set, msg, inst.ID, DropReasonIssueChatNotSteward), finalizeMark, nil
+	if inst.WorkspaceID != route.WorkspaceID {
+		return r.drop(ctx, set, msg, inst.ID, DropReasonNonWorkspaceMember), finalizeMark, nil
 	}
 	if set.IssueChat.SentByBot(msg) {
 		return r.drop(ctx, set, msg, inst.ID, DropReasonIssueChatBotSender), finalizeMark, nil

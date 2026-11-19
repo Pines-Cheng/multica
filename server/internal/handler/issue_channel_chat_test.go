@@ -42,7 +42,7 @@ func TestCreateChannelIssueComment_BehavesLikeAWebComment(t *testing.T) {
 		}
 	})
 
-	commentID, err := h.CreateChannelIssueComment(context.Background(), lark.ChannelIssueCommentParams{
+	result, err := h.CreateChannelIssueComment(context.Background(), lark.ChannelIssueCommentParams{
 		WorkspaceID:  parseUUID(testWorkspaceID),
 		IssueID:      parseUUID(issueID),
 		AuthorUserID: parseUUID(testUserID),
@@ -52,6 +52,10 @@ func TestCreateChannelIssueComment_BehavesLikeAWebComment(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("CreateChannelIssueComment: %v", err)
+	}
+	commentID := result.ID
+	if len(result.Outcomes) != 1 || result.Outcomes[0].Status != "queued" {
+		t.Fatalf("admission outcomes lost: %+v", result)
 	}
 	var authorType, authorID string
 	dbfx.QueryRow(t, `SELECT author_type, author_id::text FROM comment WHERE id = $1`, commentID).Scan(&authorType, &authorID)
@@ -110,7 +114,7 @@ func TestCreateChannelIssueCommentCommitsMediaAndSourceAtomically(t *testing.T) 
 			if outcome == "lost queue lease" {
 				leaseToken = dbid.NewV7()
 			}
-			commentID, err := h.CreateChannelIssueComment(context.Background(), lark.ChannelIssueCommentParams{
+			result, err := h.CreateChannelIssueComment(context.Background(), lark.ChannelIssueCommentParams{
 				WorkspaceID: parseUUID(testWorkspaceID), IssueID: parseUUID(issueID), AuthorUserID: parseUUID(testUserID),
 				BindingID: bindingID, LeaseToken: leaseToken,
 				SyncState: []byte(`{"Incomplete":true}`),
@@ -120,6 +124,7 @@ func TestCreateChannelIssueCommentCommitsMediaAndSourceAtomically(t *testing.T) 
 					Type: channel.MsgTypeImage, StorageKey: key, StorageURL: url, Filename: "shot.png", MimeType: "image/png", SizeBytes: 12,
 				}}},
 			})
+			commentID := result.ID
 			if outcome != "success" {
 				if err == nil {
 					t.Fatal("expected the transaction to fail")
@@ -156,7 +161,7 @@ func TestCreateChannelIssueCommentCommitsMediaAndSourceAtomically(t *testing.T) 
 			if n := dbfx.Count(t, `SELECT count(*) FROM channel_issue_message WHERE channel_message_id = $1 AND sync_state ->> 'Incomplete' = 'true'`, messageID); n != 1 {
 				t.Fatalf("sync state was not committed with comment: count=%d", n)
 			}
-			if n := dbfx.Count(t, `SELECT count(*) FROM channel_issue_comment_pending WHERE channel_message_id = $1`, messageID); n != 0 {
+			if n := dbfx.Count(t, `SELECT count(*) FROM channel_issue_comment_pending WHERE channel_message_id = $1 AND state = 'pending'`, messageID); n != 0 {
 				t.Fatalf("pending messages after commit = %d", n)
 			}
 			if n := dbfx.Count(t, `SELECT count(*) FROM channel_media_pending_object WHERE storage_key = $1`, key); n != 0 {

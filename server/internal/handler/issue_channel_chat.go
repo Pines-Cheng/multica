@@ -40,7 +40,7 @@ var _ lark.IssueCommentWriter = (*Handler)(nil)
 // identity, so access checks, mention triggers and events are exactly those
 // of a comment written on the web; the channel origin rides on the context
 // into the comment:created payload.
-func (h *Handler) CreateChannelIssueComment(ctx context.Context, p lark.ChannelIssueCommentParams) (pgtype.UUID, error) {
+func (h *Handler) CreateChannelIssueComment(ctx context.Context, p lark.ChannelIssueCommentParams) (lark.ChannelIssueCommentResult, error) {
 	issueID := uuidToString(p.IssueID)
 	body := map[string]any{"content": p.Content}
 	if p.ParentCommentID.Valid {
@@ -48,7 +48,7 @@ func (h *Handler) CreateChannelIssueComment(ctx context.Context, p lark.ChannelI
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
-		return pgtype.UUID{}, err
+		return lark.ChannelIssueCommentResult{}, err
 	}
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("id", issueID)
@@ -56,7 +56,7 @@ func (h *Handler) CreateChannelIssueComment(ctx context.Context, p lark.ChannelI
 	reqCtx = context.WithValue(reqCtx, channelIssueCommentKey{}, p)
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "/api/issues/"+issueID+"/comments", bytes.NewReader(raw))
 	if err != nil {
-		return pgtype.UUID{}, err
+		return lark.ChannelIssueCommentResult{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-User-ID", uuidToString(p.AuthorUserID))
@@ -68,18 +68,18 @@ func (h *Handler) CreateChannelIssueComment(ctx context.Context, p lark.ChannelI
 	case rec.Code == http.StatusCreated:
 		var resp CommentResponse
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-			return pgtype.UUID{}, fmt.Errorf("decode channel comment response: %w", err)
+			return lark.ChannelIssueCommentResult{}, fmt.Errorf("decode channel comment response: %w", err)
 		}
-		return parseUUID(resp.ID), nil
+		return channelCommentResult(parseUUID(resp.ID), resp.TriggerOutcomes), nil
 	case rec.Code >= 400 && rec.Code < 500:
-		return pgtype.UUID{}, fmt.Errorf("%w: status %d: %s", lark.ErrIssueCommentRejected, rec.Code, rec.Body.String())
+		return lark.ChannelIssueCommentResult{}, fmt.Errorf("%w: status %d: %s", lark.ErrIssueCommentRejected, rec.Code, rec.Body.String())
 	default:
-		return pgtype.UUID{}, fmt.Errorf("create channel comment: status %d: %s", rec.Code, rec.Body.String())
+		return lark.ChannelIssueCommentResult{}, fmt.Errorf("create channel comment: status %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
 // bindChannelIssueComment commits attachments, the source-message mapping and
-// queue acknowledgement with the comment, before events or agent triggers run.
+// dispatch checkpoint with the comment, before events or agent triggers run.
 func bindChannelIssueComment(ctx context.Context, q *db.Queries, p lark.ChannelIssueCommentParams, created *db.CreateCommentRow) error {
 	if err := bindChannelIssueAttachments(ctx, q, p, created); err != nil {
 		return err
@@ -98,8 +98,9 @@ func bindChannelIssueComment(ctx context.Context, q *db.Queries, p lark.ChannelI
 			return err
 		}
 	}
-	count, err := q.FinishChannelIssueComment(ctx, db.FinishChannelIssueCommentParams{
-		ChannelMessageID: p.Origin.MessageID, WorkspaceID: p.WorkspaceID, LeaseToken: p.LeaseToken,
+	count, err := q.BindChannelIssueComment(ctx, db.BindChannelIssueCommentParams{
+		MessageID: p.Origin.MessageID, WorkspaceID: p.WorkspaceID, LeaseToken: p.LeaseToken,
+		CommentID: created.ID, Content: created.Content,
 	})
 	if err != nil {
 		return err

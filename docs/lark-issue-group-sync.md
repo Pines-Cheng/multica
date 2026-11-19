@@ -39,7 +39,7 @@ Multica 是唯一事实源和执行方；botmux 只作交互参考，不参与�
 **P0 验收结果（2026-11，字节跳动租户，4 个 PersonalAgent Bot）**
 
 - R1、R2：扫码追加的权限生效，群里未 @ 的消息能写成评论。
-- R3：Bot 的 union_id 查不到，与租户无关——通讯录接口查询 Bot 自身需要覆盖 Bot 的通讯录范围，部门范围不够，全员范围申请不下来。已改为在 union_id 缺失时按 Bot 显示名识别 @（同名不匹配）。
+- R3：Bot 的 union_id 查不到，与租户无关——通讯录接口查询 Bot 自身需要覆盖 Bot 的通讯录范围，部门范围不够，全员范围申请不下来。当前实现不再按显示名识别 @。缺失 union_id 时，通过接收应用的通讯录接口解析 open_id，并重新查询安装机器人的身份；权限不足时明确拒绝并提供原消息重试入口。
 - R4：未触发（Squad 只有 4 个 Agent）。
 - R5：本次只验证了发起人本人入群，拉其他成员时仍需留意应用可用范围。
 
@@ -47,7 +47,7 @@ Multica 是唯一事实源和执行方；botmux 只作交互参考，不参与�
 
 ```
               ┌────────────── Multica Server ───────────────┐
-飞书群消息 ──▶ │ Feishu WS (管家 Bot 的长连接)                   │
+飞书群消息 ──▶ │ Feishu WS (工作区内任意 Bot 的长连接)                   │
               │   └▶ engine.Router                              │
               │        ├─ 普通群/私聊 → 现有 Chat 链路（不变）    │
               │        └─ 已绑定 issue 的群 → IssueChat 入站      │
@@ -109,7 +109,7 @@ Multica 是唯一事实源和执行方；botmux 只作交互参考，不参与�
 2. 指派给 Agent → 该 Agent 的有效飞书安装；
 3. 都没有 → 不能开启，返回明确错误（"该 issue 的负责 Agent 未连接飞书"）。
 
-结果写入 `steward_installation_id`，之后入站只认这个安装。Leader 更换或管家 Bot 断开时，P1 提供"交接"：新管家入群 → 更新字段 → 旧管家退群。
+结果写入 `steward_installation_id`，用于建群、成员管理与转发。入站接受同一工作区的任意安装。Leader 更换或管家 Bot 断开时，P1 提供"交接"：新管家入群 → 更新字段 → 旧管家退群。
 
 ## 6. 建群 / 开话题：`IssueChatService.EnsureChat(issueID, actor)`
 
@@ -162,17 +162,21 @@ API 为 `GET /api/issues/{id}/artifacts`、`PUT /api/issues/{id}/artifacts/{key}
 ```
 route, bound := IssueChat.Lookup(chat_id, root_id)     // 先按话题根查，再按群查
 if bound:
-    if inst.ID != route.StewardInstallationID → 丢弃（issue_chat_non_steward）
+    if inst.WorkspaceID != route.WorkspaceID → 丢弃（跨工作区）
     if 发送者是 Bot                            → 丢弃（issue_chat_bot_sender）
     identity := 解析发送者（含 union_id 兜底，§9）
     IssueChat.RecordIssueComment(...)           // 持久化待同步消息，随后返回飞书回执
     return
 ```
 
-`FeishuIssueChatRouter.Run` 在后台处理 `channel_issue_comment_pending`。同一绑定按消息顺序处理，不同绑定最多四个并行；媒体下载与上传最多等待 45 秒。进程重启后继续处理待同步消息，数据库等临时故障会重试。后台处理时重新检查安装状态、成员身份和任务归属。
+`FeishuIssueChatRouter.Run` 在后台处理 `channel_issue_comment_pending`。同一绑定按消息顺序处理，不同绑定最多四个并行；媒体下载与上传最多等待 45 秒。进程重启后继续处理待同步消息。后台处理时沿用安装状态、成员身份和任务归属校验；本次不新增发送前的执行条件检查。
 
-- **其它 Agent 的 Bot**也会收到 @它的事件，统一按 non_steward 丢弃。这样一条消息只会被处理一次，不需要跨 Bot 去重。
-- **mention 转换**：`mentions[].id.union_id` 命中本工作区某个飞书安装的 `bot_union_id` → `[@Agent](mention://agent/<id>)`；命中用户绑定 → `[@名字](mention://member/<user_id>)`；`@所有人` 和无法识别的 → 纯文本。对管家 Bot 自身的 @：如果管家就是 Leader，转换成 `@Leader` mention，等同于在 issue 里 @Leader。
+- **任意工作区 Bot 均可接收**：不要求用户 @ 管家。同一消息以 `channel_message_id` 入队去重，评论与来源映射在同一事务提交；其它工作区安装不能接管该任务群。
+- **mention 转换**：`mentions[].id.union_id` 命中本工作区某个飞书安装的 `bot_union_id` → `[@Agent](mention://agent/<id>)`；命中用户绑定 → `[@名字](mention://member/<user_id>)`；`@所有人` → 纯文本。缺失 union_id 时只在接收应用的凭据范围内解析 open_id，不比较其它应用的 open_id，不按显示名匹配。无法核实的身份停止派发并反馈；用户手写的 `mention://` 链接不会触发执行。对管家 Bot 自身的 @：如果管家就是 Leader，转换成 `@Leader` mention，等同于在 issue 里 @Leader。
+- **受理回执**：直接 @ 当前机器人的请求先收到“已收到，正在处理请求”；派发后按目标展示真实的 `queued` / `coalesced` / `deferred` / `blocked` 结果。“已排队”不表示“已执行”。回执通过持久化状态投递，失败只重试回执，不重复派发；发送使用稳定 `uuid`，后续更新同一卡片。普通讨论不发送受理回执。
+- **原消息重试**：修复调用权限、运行时或身份解析问题后，由原发起人回复原消息发送 `/retry`（可带 @）。只重试同一任务群/话题里此前被拒绝的目标，沿用原评论、原作者和现有准入规则；已排队、已合并、已延后的目标不会重跑。没有创建评论的解析失败会重新处理原消息。重试命令本身不创建评论，并持久化去重。原评论被编辑或删除后要求发送新请求。
+- **恢复边界**：评论已提交但进程在保存派发结果前退出时，回执说明“无法确认派发结果”，要求先查看执行记录，禁止自动重放，避免重复执行。该状态不是排队成功。未绑定账号的提示仍走原绑定流程，绑定前没有可重试的成员请求；应绑定后重新发送。
+- **请求状态存储**：`channel_issue_comment_pending` 保留带提及请求的原消息、评论快照、逐目标结果、回执 ID 和重试次数。状态为 `pending → dispatching → feedback → completed/blocked`；`blocked` 经原作者 `/retry` 回到 `pending`。终态不阻塞后续群消息，普通讨论同步成功后删除队列记录。工作区删除沿用原有表清理；活跃状态使用独立部分索引，避免扫描历史回执。
 - **引用回复**：`parent_id` 命中 `channel_issue_message` → 作为 comment 的 `parent_id`（落入同一 comment 串）。
 - **话题内消息**：`root_id` 命中话题根 → 写入对应子 issue。
 - **未绑定的人**：沿用现有的绑定提示卡片；消息不写入 issue。

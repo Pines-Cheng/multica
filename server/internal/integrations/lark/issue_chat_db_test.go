@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -108,11 +109,11 @@ type recordingCommentWriter struct {
 	id    pgtype.UUID
 }
 
-func (w *recordingCommentWriter) CreateChannelIssueComment(_ context.Context, p ChannelIssueCommentParams) (pgtype.UUID, error) {
+func (w *recordingCommentWriter) CreateChannelIssueComment(_ context.Context, p ChannelIssueCommentParams) (ChannelIssueCommentResult, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.calls = append(w.calls, p)
-	return w.id, nil
+	return ChannelIssueCommentResult{ID: w.id}, nil
 }
 
 func groupInbound(t *testing.T, lm InboundMessage, threadID, rootID string) channel.InboundMessage {
@@ -232,43 +233,23 @@ func (a *namedBotsAPI) GetBotInfo(_ context.Context, creds InstallationCredentia
 	return BotInfo{Name: a.names[creds.AppID]}, nil
 }
 
-// A bot whose union_id could not be resolved at install is still recognised
-// by its display name; a name two bots share resolves to neither.
-func TestIssueChatRouter_MentionFallsBackToBotName(t *testing.T) {
+func TestIssueChatRouter_DoesNotGuessBotIdentityFromName(t *testing.T) {
 	f := newIssueChatFixture(t)
-	ctx := context.Background()
-	const (
-		plannerAgent = "1c0a0000-0000-4000-8000-0000000000b1"
-		twinA        = "1c0a0000-0000-4000-8000-0000000000b2"
-		twinB        = "1c0a0000-0000-4000-8000-0000000000b3"
-	)
-	f.insertInstallation(t, plannerAgent, "cli_ic_planner", "")
-	f.insertInstallation(t, twinA, "cli_ic_twin_a", "")
-	f.insertInstallation(t, twinB, "cli_ic_twin_b", "")
-	api := &namedBotsAPI{names: map[string]string{
-		"cli_ic_planner": "Planner", "cli_ic_twin_a": "Twin", "cli_ic_twin_b": "Twin",
-	}}
-	writer := &recordingCommentWriter{id: uuidFromString(t, icNewComment)}
-	r := NewFeishuIssueChatRouter(f.store, writer, api, fakeCredentials{secret: "shh"}, newDiscardLogger())
+	f.insertInstallation(t, "1c0a0000-0000-4000-8000-0000000000b1", "cli_ic_planner", "")
+	api := &namedBotsAPI{names: map[string]string{"cli_ic_planner": "Planner"}}
+	r := NewFeishuIssueChatRouter(f.store, &recordingCommentWriter{}, api, fakeCredentials{secret: "shh"}, newDiscardLogger())
+	for _, unionID := range []string{"", "on_unknown_planner"} {
+		lm := InboundMessage{AppID: icStewardApp, MessageType: "text", Mentions: []InboundMention{
+			{Key: "@_user_1", Name: "Planner", UnionID: unionID, OpenID: "ou_planner"},
+		}}
+		if _, err := r.renderComment(context.Background(), f.binding.WorkspaceID, lm, "@_user_1 go"); !errors.Is(err, ErrMentionIdentityUnresolved) {
+			t.Fatalf("unverified name must not dispatch: %v", err)
+		}
+	}
+}
 
-	lm := InboundMessage{
-		AppID: icStewardApp, ChatID: icChatID, ChatType: ChatTypeGroup,
-		MessageID: "om_inbound_name", MessageType: "text",
-		Content:    `{"text":"@_user_1 and @_user_2 go"}`,
-		SenderType: "user",
-		Mentions: []InboundMention{
-			{Key: "@_user_1", Name: "Planner", UnionID: "on_unknown_planner"},
-			{Key: "@_user_2", Name: "Twin", UnionID: "on_unknown_twin"},
-		},
-	}
-	got, err := r.renderComment(ctx, f.binding.WorkspaceID, lm, flattenContent(lm.MessageType, lm.Content))
-	want := "[@Planner](mention://agent/" + plannerAgent + ") and @Twin go"
-	if err != nil || got != want {
-		t.Fatalf("content = %q, err=%v, want %q", got, err, want)
-	}
-	if api.calls != 3 {
-		t.Fatalf("bot info calls = %d, want one per bot without a union_id", api.calls)
-	}
+func (w *recordingCommentWriter) RetryChannelIssueComment(context.Context, db.ChannelIssueCommentPending) (ChannelIssueCommentResult, error) {
+	return ChannelIssueCommentResult{}, errors.New("unexpected retry")
 }
 
 func newSyncService(f *issueChatFixture, api *fakeAPIClient) *IssueChatService {

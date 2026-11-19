@@ -356,6 +356,9 @@ func (c *httpAPIClient) SendInteractiveCard(ctx context.Context, p SendCardParam
 		return "", errors.New("lark http client: missing card json")
 	}
 	path, body := outboundMessageRequest(p.ChatID, "interactive", p.CardJSON, p.ReplyTarget)
+	if p.DeduplicationID != "" {
+		body["uuid"] = p.DeduplicationID
+	}
 	var resp struct {
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
@@ -1203,6 +1206,10 @@ func (it larkRESTMessageItem) normalize() LarkMessage {
 // scope is restricted. Caller logs and continues; the decoder still
 // works in single-bot deployments where open_id-based matching is
 // unambiguous.
+func (c *httpAPIClient) ResolveMentionUnionID(ctx context.Context, creds InstallationCredentials, openID string) (string, error) {
+	return c.fetchBotUnionID(ctx, creds, openID)
+}
+
 func (c *httpAPIClient) fetchBotUnionID(ctx context.Context, creds InstallationCredentials, openID string) (string, error) {
 	if openID == "" {
 		return "", errors.New("empty open_id")

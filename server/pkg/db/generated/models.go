@@ -432,6 +432,13 @@ type ChannelIssueCommentPending struct {
 	LeaseToken       pgtype.UUID        `json:"lease_token"`
 	LeaseExpiresAt   pgtype.Timestamptz `json:"lease_expires_at"`
 	NextAttemptAt    pgtype.Timestamptz `json:"next_attempt_at"`
+	State            string             `json:"state"`
+	CommentID        pgtype.UUID        `json:"comment_id"`
+	CommentContent   string             `json:"comment_content"`
+	DispatchOutcomes []byte             `json:"dispatch_outcomes"`
+	FailureCode      string             `json:"failure_code"`
+	ReceiptMessageID string             `json:"receipt_message_id"`
+	Attempt          int32              `json:"attempt"`
 }
 
 type ChannelIssueMessage struct {

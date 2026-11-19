@@ -14,8 +14,6 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -70,14 +68,15 @@ type ChannelIssueCommentAttachment struct {
 
 // IssueCommentWriter creates a member comment through the same path as the
 // comment HTTP endpoint, mention triggers included. The handler layer
-// implements it; ErrIssueCommentRejected marks a refusal that a retry of the
-// same message cannot fix (issue gone, no access, invalid content).
+// implements it; ErrIssueCommentRejected marks a refusal requiring a user
+// to restore access or correct the request before an explicit retry.
 type IssueCommentWriter interface {
-	CreateChannelIssueComment(ctx context.Context, p ChannelIssueCommentParams) (pgtype.UUID, error)
+	CreateChannelIssueComment(ctx context.Context, p ChannelIssueCommentParams) (ChannelIssueCommentResult, error)
+	RetryChannelIssueComment(ctx context.Context, job db.ChannelIssueCommentPending) (ChannelIssueCommentResult, error)
 }
 
 // ErrIssueCommentRejected is returned by an IssueCommentWriter for a
-// permanent refusal of the comment.
+// refusal of the comment.
 var ErrIssueCommentRejected = errors.New("lark: issue comment rejected")
 
 // FeishuIssueChatRouter implements engine.IssueChatRouter for Feishu.
@@ -88,31 +87,18 @@ type FeishuIssueChatRouter struct {
 	creds  CredentialsResolver
 	logger *slog.Logger
 	media  engine.MediaResolver
-
-	namesMu sync.Mutex
-	names   map[pgtype.UUID]cachedBotName
 }
-
-// cachedBotName is a bot display name read from Lark, kept briefly so a busy
-// chat does not call /bot/v3/info for every mention.
-type cachedBotName struct {
-	name    string
-	fetched time.Time
-}
-
-const botNameTTL = 10 * time.Minute
 
 var _ engine.IssueChatRouter = (*FeishuIssueChatRouter)(nil)
 
 // NewFeishuIssueChatRouter builds the router. api and creds may be nil; the
-// bot-name mention fallback is then off and only union_id matches resolve.
+// only verified union_id matches can then resolve.
 func NewFeishuIssueChatRouter(store *ChannelStore, writer IssueCommentWriter, api APIClient, creds CredentialsResolver, logger *slog.Logger) *FeishuIssueChatRouter {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &FeishuIssueChatRouter{
 		store: store, writer: writer, api: api, creds: creds, logger: logger,
-		names: make(map[pgtype.UUID]cachedBotName),
 	}
 }
 
@@ -209,6 +195,7 @@ func (r *FeishuIssueChatRouter) parentComment(ctx context.Context, issueID pgtyp
 // resolved by union_id, the only identity consistent across the bots in one
 // chat: a bot becomes an agent mention, a bound person a member mention.
 func (r *FeishuIssueChatRouter) renderComment(ctx context.Context, workspaceID pgtype.UUID, lm InboundMessage, text string) (string, error) {
+	text = strings.ReplaceAll(text, "mention://", "mention-disabled://")
 	if (lm.MessageType != "text" && lm.MessageType != "post") || len(lm.Mentions) == 0 {
 		return text, nil
 	}
@@ -222,8 +209,43 @@ func (r *FeishuIssueChatRouter) renderComment(ctx context.Context, workspaceID p
 			agentByBot[inst.BotUnionID.String] = inst.AgentID
 		}
 	}
-	var agentByName map[string]pgtype.UUID
+	// open_id belongs to the receiving app; it must never be compared with
+	// another installation's open_id or with a display name.
+	var receiving Installation
+	for _, inst := range insts {
+		if inst.AppID == lm.AppID {
+			receiving = inst
+			break
+		}
+	}
 	replacements := make(map[string]string, len(lm.Mentions))
+	unknownBots, lookedUpBots := false, false
+	resolveUnknownBots := func() error {
+		if lookedUpBots {
+			return nil
+		}
+		lookedUpBots = true
+		for _, inst := range insts {
+			if InstallationStatus(inst.Status) != InstallationActive || inst.BotUnionID.String != "" {
+				continue
+			}
+			if r.api == nil || r.creds == nil {
+				unknownBots = true
+				continue
+			}
+			creds, err := installationCredentialsFor(inst, r.creds)
+			if err != nil {
+				return err
+			}
+			info, err := r.api.GetBotInfo(ctx, creds)
+			if err != nil || info.UnionID == "" {
+				unknownBots = true
+				continue
+			}
+			agentByBot[info.UnionID] = inst.AgentID
+		}
+		return nil
+	}
 	for _, m := range lm.Mentions {
 		if m.Key == "" {
 			continue
@@ -233,86 +255,55 @@ func (r *FeishuIssueChatRouter) renderComment(ctx context.Context, workspaceID p
 			label = strings.TrimPrefix(m.Key, "@")
 		}
 		replacements[m.Key] = "@" + label
-		if m.UnionID == "" {
+		if m.Key == "@_all" || m.OpenID == "all" {
 			continue
 		}
-		if agentID, ok := agentByBot[m.UnionID]; ok {
+		unionID := m.UnionID
+		if unionID == "" && m.OpenID != "" && receiving.ID.Valid && r.creds != nil {
+			if resolver, ok := r.api.(MentionIdentityResolver); ok {
+				creds, err := installationCredentialsFor(receiving, r.creds)
+				if err != nil {
+					return "", err
+				}
+				unionID, err = resolver.ResolveMentionUnionID(ctx, creds, m.OpenID)
+				if err != nil {
+					return "", fmt.Errorf("%w: %v", ErrMentionIdentityUnresolved, err)
+				}
+			}
+		}
+		if unionID == "" {
+			return "", ErrMentionIdentityUnresolved
+		}
+		if agentID, ok := agentByBot[unionID]; ok {
 			replacements[m.Key] = multicaMention(label, "agent", agentID)
 			continue
 		}
 		binding, err := r.store.FindChannelUserBindingByUnionID(ctx, db.FindChannelUserBindingByUnionIDParams{
-			WorkspaceID: workspaceID,
-			ChannelType: channelTypeFeishu,
-			UnionID:     m.UnionID,
+			WorkspaceID: workspaceID, ChannelType: channelTypeFeishu, UnionID: unionID,
 		})
 		if err == nil {
 			replacements[m.Key] = multicaMention(label, "member", binding.MulticaUserID)
-			continue
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return "", err
-		}
-		// Bots whose union_id could not be resolved at install (the contact
-		// lookup needs a contact range that covers the bot) are matched by
-		// their display name. A name shared by two bots matches neither.
-		if agentByName == nil {
-			agentByName = r.agentsByBotName(ctx, insts, agentByBot)
-		}
-		if agentID, ok := agentByName[strings.TrimSpace(m.Name)]; ok {
-			replacements[m.Key] = multicaMention(label, "agent", agentID)
+		} else {
+			if err := resolveUnknownBots(); err != nil {
+				return "", err
+			}
+			if agentID, ok := agentByBot[unionID]; ok {
+				replacements[m.Key] = multicaMention(label, "agent", agentID)
+			} else if unknownBots {
+				return "", ErrMentionIdentityUnresolved
+			}
 		}
 	}
 	return replaceMentionKeys(text, replacements), nil
 }
 
-// agentsByBotName maps the display name of every active bot without a known
-// union_id to its agent. Ambiguous names are left out.
-func (r *FeishuIssueChatRouter) agentsByBotName(ctx context.Context, insts []Installation, known map[string]pgtype.UUID) map[string]pgtype.UUID {
-	out := map[string]pgtype.UUID{}
-	if r.api == nil || r.creds == nil {
-		return out
-	}
-	ambiguous := map[string]bool{}
-	for _, inst := range insts {
-		if InstallationStatus(inst.Status) != InstallationActive {
-			continue
-		}
-		if _, ok := known[inst.BotUnionID.String]; ok && inst.BotUnionID.String != "" {
-			continue
-		}
-		name := strings.TrimSpace(r.botName(ctx, inst))
-		if name == "" {
-			continue
-		}
-		if _, dup := out[name]; dup || ambiguous[name] {
-			delete(out, name)
-			ambiguous[name] = true
-			continue
-		}
-		out[name] = inst.AgentID
-	}
-	return out
-}
+var ErrMentionIdentityUnresolved = errors.New("lark: mention identity could not be verified")
 
-func (r *FeishuIssueChatRouter) botName(ctx context.Context, inst Installation) string {
-	r.namesMu.Lock()
-	cached, ok := r.names[inst.ID]
-	r.namesMu.Unlock()
-	if ok && time.Since(cached.fetched) < botNameTTL {
-		return cached.name
-	}
-	creds, err := installationCredentialsFor(inst, r.creds)
-	if err != nil {
-		return ""
-	}
-	info, err := r.api.GetBotInfo(ctx, creds)
-	if err != nil {
-		r.logger.Warn("lark issue chat: bot name lookup failed", "installation_id", uuidString(inst.ID), "error", err)
-		return ""
-	}
-	r.namesMu.Lock()
-	r.names[inst.ID] = cachedBotName{name: info.Name, fetched: time.Now()}
-	r.namesMu.Unlock()
-	return info.Name
+// MentionIdentityResolver resolves IDs only in the app that received them.
+type MentionIdentityResolver interface {
+	ResolveMentionUnionID(context.Context, InstallationCredentials, string) (string, error)
 }
 
 func multicaMention(label, kind string, id pgtype.UUID) string {

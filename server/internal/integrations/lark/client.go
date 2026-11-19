@@ -268,8 +268,9 @@ type BotInfo struct {
 
 // SendCardParams is the input shape for posting a fresh card.
 type SendCardParams struct {
-	InstallationID InstallationCredentials
-	ChatID         ChatID
+	DeduplicationID string
+	InstallationID  InstallationCredentials
+	ChatID          ChatID
 	// CardJSON is the raw Lark interactive card JSON body. We pass it
 	// through opaque so the card-template package can evolve without
 	// dragging this transport interface along.

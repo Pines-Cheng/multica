@@ -199,6 +199,8 @@ var concurrentIndexCleanups = map[string]string{
 	"604_channel_issue_message_task_idx":                        "channel_issue_message_task_idx",
 	"612_channel_issue_comment_pending_message_idx":             "channel_issue_comment_pending_message_idx",
 	"613_channel_issue_comment_pending_binding_idx":             "channel_issue_comment_pending_binding_idx",
+	"619_channel_issue_comment_active_idx":                      "channel_issue_comment_active_idx",
+	"620_channel_issue_comment_blocker_idx":                     "channel_issue_comment_blocker_idx",
 	"035_task_queue_issue_id_index":                             "idx_agent_task_queue_issue_id",
 	"067_task_queue_claim_candidate_index":                      "idx_agent_task_queue_claim_candidates",
 	"074_task_usage_updated_at_index":                           "idx_task_usage_updated_at",

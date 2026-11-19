@@ -52,10 +52,6 @@ const (
 	DropReasonRevokedInstallation DropReason = "revoked_installation"
 	DropReasonInvalidEvent        DropReason = "invalid_event"
 	DropReasonInvokeDenied        DropReason = "invocation_not_allowed"
-	// DropReasonIssueChatNotSteward — an issue-bound chat is ingested by its
-	// steward bot only; every other bot in the chat stands down so one
-	// message becomes at most one comment.
-	DropReasonIssueChatNotSteward DropReason = "issue_chat_not_steward"
 	// DropReasonIssueChatBotSender — bots in an issue-bound chat mirror the
 	// issue timeline; ingesting their messages would loop comments back.
 	DropReasonIssueChatBotSender DropReason = "issue_chat_bot_sender"

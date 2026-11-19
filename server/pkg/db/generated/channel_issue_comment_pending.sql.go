@@ -11,14 +11,44 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bindChannelIssueComment = `-- name: BindChannelIssueComment :execrows
+UPDATE channel_issue_comment_pending
+SET comment_id = $1, comment_content = $2, state = 'dispatching'
+WHERE channel_message_id = $3 AND workspace_id = $4
+  AND lease_token = $5 AND state = 'pending'
+`
+
+type BindChannelIssueCommentParams struct {
+	CommentID   pgtype.UUID `json:"comment_id"`
+	Content     string      `json:"content"`
+	MessageID   string      `json:"message_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	LeaseToken  pgtype.UUID `json:"lease_token"`
+}
+
+func (q *Queries) BindChannelIssueComment(ctx context.Context, arg BindChannelIssueCommentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, bindChannelIssueComment,
+		arg.CommentID,
+		arg.Content,
+		arg.MessageID,
+		arg.WorkspaceID,
+		arg.LeaseToken,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const claimChannelIssueComment = `-- name: ClaimChannelIssueComment :one
 WITH candidate AS MATERIALIZED (
     SELECT p.channel_message_id FROM channel_issue_comment_pending p
-    WHERE p.next_attempt_at <= now()
+    WHERE p.state IN ('pending', 'dispatching', 'feedback') AND p.next_attempt_at <= now()
       AND (p.lease_expires_at IS NULL OR p.lease_expires_at <= now())
       AND NOT EXISTS (
           SELECT 1 FROM channel_issue_comment_pending earlier
           WHERE earlier.binding_id = p.binding_id AND earlier.id < p.id
+            AND earlier.state IN ('pending', 'dispatching')
       )
     ORDER BY p.id
     LIMIT 1 FOR UPDATE OF p SKIP LOCKED
@@ -26,7 +56,7 @@ WITH candidate AS MATERIALIZED (
 UPDATE channel_issue_comment_pending p
 SET lease_token = $1, lease_expires_at = now() + interval '2 minutes'
 FROM candidate c WHERE p.channel_message_id = c.channel_message_id
-RETURNING p.id, p.workspace_id, p.issue_id, p.binding_id, p.installation_id, p.author_user_id, p.channel_message_id, p.message, p.lease_token, p.lease_expires_at, p.next_attempt_at
+RETURNING p.id, p.workspace_id, p.issue_id, p.binding_id, p.installation_id, p.author_user_id, p.channel_message_id, p.message, p.lease_token, p.lease_expires_at, p.next_attempt_at, p.state, p.comment_id, p.comment_content, p.dispatch_outcomes, p.failure_code, p.receipt_message_id, p.attempt
 `
 
 // Process a binding in message order, including replies to pending images.
@@ -45,8 +75,42 @@ func (q *Queries) ClaimChannelIssueComment(ctx context.Context, leaseToken pgtyp
 		&i.LeaseToken,
 		&i.LeaseExpiresAt,
 		&i.NextAttemptAt,
+		&i.State,
+		&i.CommentID,
+		&i.CommentContent,
+		&i.DispatchOutcomes,
+		&i.FailureCode,
+		&i.ReceiptMessageID,
+		&i.Attempt,
 	)
 	return i, err
+}
+
+const completeChannelIssueComment = `-- name: CompleteChannelIssueComment :execrows
+UPDATE channel_issue_comment_pending
+SET state = $1, lease_token = NULL, lease_expires_at = NULL
+WHERE channel_message_id = $2 AND workspace_id = $3
+  AND lease_token = $4
+`
+
+type CompleteChannelIssueCommentParams struct {
+	State       string      `json:"state"`
+	MessageID   string      `json:"message_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	LeaseToken  pgtype.UUID `json:"lease_token"`
+}
+
+func (q *Queries) CompleteChannelIssueComment(ctx context.Context, arg CompleteChannelIssueCommentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, completeChannelIssueComment,
+		arg.State,
+		arg.MessageID,
+		arg.WorkspaceID,
+		arg.LeaseToken,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const finishChannelIssueComment = `-- name: FinishChannelIssueComment :execrows
@@ -66,6 +130,42 @@ func (q *Queries) FinishChannelIssueComment(ctx context.Context, arg FinishChann
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const getChannelIssueCommentRequest = `-- name: GetChannelIssueCommentRequest :one
+SELECT id, workspace_id, issue_id, binding_id, installation_id, author_user_id, channel_message_id, message, lease_token, lease_expires_at, next_attempt_at, state, comment_id, comment_content, dispatch_outcomes, failure_code, receipt_message_id, attempt FROM channel_issue_comment_pending
+WHERE channel_message_id = $1 AND workspace_id = $2
+`
+
+type GetChannelIssueCommentRequestParams struct {
+	ChannelMessageID string      `json:"channel_message_id"`
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetChannelIssueCommentRequest(ctx context.Context, arg GetChannelIssueCommentRequestParams) (ChannelIssueCommentPending, error) {
+	row := q.db.QueryRow(ctx, getChannelIssueCommentRequest, arg.ChannelMessageID, arg.WorkspaceID)
+	var i ChannelIssueCommentPending
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.IssueID,
+		&i.BindingID,
+		&i.InstallationID,
+		&i.AuthorUserID,
+		&i.ChannelMessageID,
+		&i.Message,
+		&i.LeaseToken,
+		&i.LeaseExpiresAt,
+		&i.NextAttemptAt,
+		&i.State,
+		&i.CommentID,
+		&i.CommentContent,
+		&i.DispatchOutcomes,
+		&i.FailureCode,
+		&i.ReceiptMessageID,
+		&i.Attempt,
+	)
+	return i, err
 }
 
 const queueChannelIssueComment = `-- name: QueueChannelIssueComment :exec
@@ -101,6 +201,46 @@ func (q *Queries) QueueChannelIssueComment(ctx context.Context, arg QueueChannel
 	return err
 }
 
+const restartChannelIssueComment = `-- name: RestartChannelIssueComment :execrows
+WITH command AS (
+    UPDATE channel_issue_comment_pending cmd
+    SET state = 'completed', lease_expires_at = NULL
+    WHERE cmd.channel_message_id = $3
+      AND cmd.workspace_id = $2 AND cmd.lease_token = $4
+      AND cmd.state = 'pending'
+    RETURNING cmd.binding_id, cmd.author_user_id
+)
+UPDATE channel_issue_comment_pending p
+SET state = 'pending', failure_code = '', attempt = attempt + 1,
+    lease_token = NULL, lease_expires_at = NULL, next_attempt_at = now()
+FROM command c
+WHERE p.channel_message_id = $1
+  AND p.workspace_id = $2 AND p.binding_id = c.binding_id
+  AND p.author_user_id = c.author_user_id AND p.state = 'blocked'
+  AND p.failure_code NOT IN ('dispatch_unknown', 'comment_changed', 'retry_not_allowed')
+`
+
+type RestartChannelIssueCommentParams struct {
+	OriginalMessageID string      `json:"original_message_id"`
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	CommandMessageID  string      `json:"command_message_id"`
+	LeaseToken        pgtype.UUID `json:"lease_token"`
+}
+
+// Consuming the command and restarting its original request are atomic.
+func (q *Queries) RestartChannelIssueComment(ctx context.Context, arg RestartChannelIssueCommentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, restartChannelIssueComment,
+		arg.OriginalMessageID,
+		arg.WorkspaceID,
+		arg.CommandMessageID,
+		arg.LeaseToken,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const retryChannelIssueComment = `-- name: RetryChannelIssueComment :exec
 UPDATE channel_issue_comment_pending
 SET lease_token = NULL, lease_expires_at = NULL, next_attempt_at = now() + interval '5 seconds'
@@ -116,4 +256,79 @@ type RetryChannelIssueCommentParams struct {
 func (q *Queries) RetryChannelIssueComment(ctx context.Context, arg RetryChannelIssueCommentParams) error {
 	_, err := q.db.Exec(ctx, retryChannelIssueComment, arg.ChannelMessageID, arg.WorkspaceID, arg.LeaseToken)
 	return err
+}
+
+const setChannelIssueCommentOutcome = `-- name: SetChannelIssueCommentOutcome :execrows
+UPDATE channel_issue_comment_pending
+SET dispatch_outcomes = $1, failure_code = $2, state = 'feedback'
+WHERE channel_message_id = $3 AND workspace_id = $4
+  AND lease_token = $5
+`
+
+type SetChannelIssueCommentOutcomeParams struct {
+	Outcomes    []byte      `json:"outcomes"`
+	FailureCode string      `json:"failure_code"`
+	MessageID   string      `json:"message_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	LeaseToken  pgtype.UUID `json:"lease_token"`
+}
+
+func (q *Queries) SetChannelIssueCommentOutcome(ctx context.Context, arg SetChannelIssueCommentOutcomeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setChannelIssueCommentOutcome,
+		arg.Outcomes,
+		arg.FailureCode,
+		arg.MessageID,
+		arg.WorkspaceID,
+		arg.LeaseToken,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setChannelIssueCommentReceipt = `-- name: SetChannelIssueCommentReceipt :execrows
+UPDATE channel_issue_comment_pending
+SET receipt_message_id = $1
+WHERE channel_message_id = $2 AND workspace_id = $3
+  AND lease_token = $4
+`
+
+type SetChannelIssueCommentReceiptParams struct {
+	ReceiptMessageID string      `json:"receipt_message_id"`
+	MessageID        string      `json:"message_id"`
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	LeaseToken       pgtype.UUID `json:"lease_token"`
+}
+
+func (q *Queries) SetChannelIssueCommentReceipt(ctx context.Context, arg SetChannelIssueCommentReceiptParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setChannelIssueCommentReceipt,
+		arg.ReceiptMessageID,
+		arg.MessageID,
+		arg.WorkspaceID,
+		arg.LeaseToken,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const startChannelIssueCommentRetry = `-- name: StartChannelIssueCommentRetry :execrows
+UPDATE channel_issue_comment_pending SET state = 'dispatching'
+WHERE channel_message_id = $1 AND workspace_id = $2 AND lease_token = $3 AND state = 'pending'
+`
+
+type StartChannelIssueCommentRetryParams struct {
+	ChannelMessageID string      `json:"channel_message_id"`
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	LeaseToken       pgtype.UUID `json:"lease_token"`
+}
+
+func (q *Queries) StartChannelIssueCommentRetry(ctx context.Context, arg StartChannelIssueCommentRetryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, startChannelIssueCommentRetry, arg.ChannelMessageID, arg.WorkspaceID, arg.LeaseToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
